@@ -1212,7 +1212,7 @@ def main(stdscr):
     while True:
         result = run_menu(stdscr, "Main Menu",
                           ["Applications", "Documents", "Network", "Games", "Program Installer", "Terminal",
-                           "---", "Settings", "Logout"])
+                           "---", "Settings", "Logout"], subtitle="RobcOS v.85")
         if result == "Logout":
             playsound('Sounds/ui_hacking_passbad.wav', False)
             curses_message(stdscr, "Logging out...", 1)
