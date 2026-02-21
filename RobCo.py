@@ -672,7 +672,7 @@ def appstore_menu(stdscr):
                 else:
                     pkg = pkg_result.strip()
                     info = get_package_info(pm, pkg) if has_internet() else "No internet - description unavailable."
-                    action = run_menu(stdscr, pkg, ["Update", "Uninstall", "---", "Back"],
+                    action = run_menu(stdscr, pkg, ["Update", "Uninstall", "Add to Menu", "---", "Back"],
                                       subtitle=info)
                     if action == "Uninstall":
                         if curses_confirm(stdscr, f"Uninstall {pkg}?"):
@@ -704,6 +704,26 @@ def appstore_menu(stdscr):
                                 curses_box_message(stdscr, f"{pkg} updated.")
                             else:
                                 curses_box_message(stdscr, f"Failed to update {pkg}.")
+                    elif action == "Add to Menu":
+                        menu_choice = run_menu(stdscr, "Add to Menu",
+                                               ["Applications", "Games", "Network", "---", "Back"])
+                        if menu_choice != "Back":
+                            display_name = curses_input(stdscr, f"Enter display name for '{pkg}':")
+                            if not display_name:
+                                display_name = pkg
+                            if menu_choice == "Applications":
+                                data = load_apps()
+                                data[display_name] = [pkg]
+                                save_apps(data)
+                            elif menu_choice == "Games":
+                                data = load_games()
+                                data[display_name] = [pkg]
+                                save_games(data)
+                            elif menu_choice == "Network":
+                                data = load_networks()
+                                data[display_name] = [pkg]
+                                save_networks(data)
+                            curses_box_message(stdscr, f"{display_name} added to {menu_choice}.")
 
         
 # ─── Menus ────────────────────────────────────────────────────────────────────
