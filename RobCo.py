@@ -10,6 +10,7 @@ import pty
 import select
 import itertools
 import random
+import psutil
 import pyte
 from pathlib import Path
 from datetime import date, datetime
@@ -85,11 +86,20 @@ def draw_header(win):
 
 def draw_status(win):
     h, w = win.getmaxyx()
-    now = datetime.now().strftime("%H:%M:%S")
-    status = f" ROBCO SYSTEM ACTIVE | {now} "
+    now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
+    status = f"{now}"
     status = status.ljust(w)[:w - 1]
+    battery = psutil.sensors_battery()
+    batt_percent = battery.percent
+    batt_status = f"{batt_percent} %"
     try:
         win.addstr(h - 1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+    except curses.error:
+        pass
+    try:
+        if battery is None:
+            batt_status = ""
+        win.addstr(h-1, w - 2 - len(batt_status), batt_status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
     except curses.error:
         pass
 
@@ -666,7 +676,6 @@ def bootup_curses(stdscr):
 
     def skipped():
         return stdscr.getch() == ord(' ')
-
     sounds= [
         'Sounds/ui_hacking_charsingle_01.wav',
         'Sounds/ui_hacking_charsingle_02.wav',
