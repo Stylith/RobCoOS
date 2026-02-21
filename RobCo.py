@@ -476,17 +476,103 @@ def about_edit_menu(stdscr, config):
 # ─── Journal ──────────────────────────────────────────────────────────────────
 def journal_new(stdscr):
     global status_paused
+    status_paused = True
     current_date = date.today()
     x = Path("journal_entries")
     x.mkdir(exist_ok=True)
-    status_paused = True
-    text = curses_input(stdscr, f"New Entry - {current_date}")
-    status_paused = False
-    if text:
-        file_name = x / f"{current_date}.txt"
-        with open(file_name, "a") as f:
-            f.write(text + "\n")
-        curses_message(stdscr, "Entry saved.")
+
+    lines = [""]
+    cursor_row = 0
+    cursor_col = 0
+
+    curses.curs_set(1)
+
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        draw_header(stdscr)
+        draw_separator(stdscr, 4, w)
+        draw_menu_title(stdscr, f"New Entry - {current_date}", 5)
+        draw_separator(stdscr, 6, w)
+
+        # Draw text area
+        for i, line in enumerate(lines):
+            try:
+                stdscr.addstr(8 + i, 2, line[:w - 4], curses.color_pair(COLOR_NORMAL))
+            except curses.error:
+                pass
+
+        # Footer hints
+        try:
+            stdscr.addstr(h - 2, 2, "CTRL+W = save  |  CTRL+X = cancel",
+                          curses.color_pair(COLOR_DIM))
+        except curses.error:
+            pass
+
+        draw_status(stdscr)
+
+        # Place cursor
+        try:
+            stdscr.move(8 + cursor_row, 2 + cursor_col)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key == 23:  # Ctrl+S save
+            text = "\n".join(lines).strip()
+            if text:
+                file_name = x / f"{current_date}.txt"
+                with open(file_name, "a") as f:
+                    f.write(text + "\n")
+                curses.curs_set(0)
+                status_paused = False
+                curses_message(stdscr, "Entry saved.")
+            return
+
+        elif key == 24:  # Ctrl+C cancel
+            curses.curs_set(0)
+            status_paused = False
+            return
+
+        elif key in (curses.KEY_ENTER, 10, 13):
+            # Split line at cursor and insert new line
+            current = lines[cursor_row]
+            lines[cursor_row] = current[:cursor_col]
+            lines.insert(cursor_row + 1, current[cursor_col:])
+            cursor_row += 1
+            cursor_col = 0
+
+        elif key in (curses.KEY_BACKSPACE, 127):
+            if cursor_col > 0:
+                lines[cursor_row] = lines[cursor_row][:cursor_col - 1] + lines[cursor_row][cursor_col:]
+                cursor_col -= 1
+            elif cursor_row > 0:
+                # Merge with previous line
+                prev_len = len(lines[cursor_row - 1])
+                lines[cursor_row - 1] += lines[cursor_row]
+                lines.pop(cursor_row)
+                cursor_row -= 1
+                cursor_col = prev_len
+
+        elif key == curses.KEY_UP and cursor_row > 0:
+            cursor_row -= 1
+            cursor_col = min(cursor_col, len(lines[cursor_row]))
+
+        elif key == curses.KEY_DOWN and cursor_row < len(lines) - 1:
+            cursor_row += 1
+            cursor_col = min(cursor_col, len(lines[cursor_row]))
+
+        elif key == curses.KEY_LEFT and cursor_col > 0:
+            cursor_col -= 1
+
+        elif key == curses.KEY_RIGHT and cursor_col < len(lines[cursor_row]):
+            cursor_col += 1
+
+        elif 32 <= key <= 126:  # Printable characters
+            lines[cursor_row] = lines[cursor_row][:cursor_col] + chr(key) + lines[cursor_row][cursor_col:]
+            cursor_col += 1
 
 def journal_view(stdscr):
     directory_path = Path("journal_entries")
@@ -498,7 +584,7 @@ def journal_view(stdscr):
         curses_message(stdscr, "Error: Log folder empty.")
         return
     file_map = {f.stem: f for f in logs}
-    options = sorted(file_map.keys()) + ["Back"]
+    options = sorted(file_map.keys(), reverse=True) + ["Back"]
     while True:
         result = run_menu(stdscr, "View Logs", options)
         if result == "Back":
@@ -517,7 +603,7 @@ def journal_delete(stdscr):
         curses_message(stdscr, "Error: Log folder empty.")
         return
     file_map = {f.stem: f for f in logs}
-    options = sorted(file_map.keys()) + ["Back"]
+    options = sorted(file_map.keys(), reverse=True) + ["Back"]
     result = run_menu(stdscr, "Delete Log", options)
     if result == "Back" or result not in file_map:
         return
@@ -906,7 +992,12 @@ def documents_menu(stdscr):
                 if not files:
                     curses_message(stdscr, "No supported documents found.")
                     break
-                files.sort(key=lambda f: f.stem.lower())
+                def sort_key(f):
+                    name = f.stem.replace("_", " ").lower()
+                    if name.startswith("the "):
+                        name = name[4:]
+                    return name
+                files.sort(key=sort_key)
                 file_map = {f.stem.replace("_", " "): f for f in files}
                 file_result = run_menu(stdscr, result, list(file_map.keys()) + ["Back"], subtitle=f"Select {result}")
                 if file_result == "Back":
