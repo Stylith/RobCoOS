@@ -8,21 +8,23 @@ import random
 import curses
 import itertools
 import threading
+import psutil
 from pathlib import Path
 from datetime import date, datetime
 
 # Try playsound - make it optional
 try:
-    from playsound import playsound
+    from playsound import playsound as _playsound_impl
     SOUND_ENABLED = True
 except ImportError:
     SOUND_ENABLED = False
-    def playsound(*args, **kwargs):
-        pass
+    _playsound_impl = None
 
 base_dir = Path(__file__).resolve().parent
 if base_dir.is_dir():
     os.chdir(base_dir)
+
+shell = os.environ.get("SHELL", "/bin/bash")
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 COLOR_NORMAL   = 1
@@ -58,11 +60,20 @@ def draw_header(win):
 
 def draw_status(win):
     h, w = win.getmaxyx()
-    now = datetime.now().strftime("%H:%M:%S")
-    status = f" ROBCO SYSTEM ACTIVE | {now} "
+    now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
+    status = f"{now} "
     status = status.ljust(w)[:w-1]
+    battery = psutil.sensors_battery()
+    batt_percent = battery.percent
+    batt_status = f"{batt_percent} %"
     try:
         win.addstr(h-1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+    except curses.error:
+        pass
+    try:
+        if battery is None:
+            batt_status = ""
+        win.addstr(h-1, w - 2 - len(batt_status), batt_status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
     except curses.error:
         pass
 
@@ -127,12 +138,15 @@ def run_menu(stdscr, title, choices):
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord('k')):
             idx = (idx - 1) % len(selectable) if selectable else 0
+            playsound('Sounds/ui_hacking_charenter_01.wav', False)
         elif key in (curses.KEY_DOWN, ord('j')):
             idx = (idx + 1) % len(selectable) if selectable else 0
-        elif key in (curses.KEY_ENTER, 10, 13):
+            playsound('Sounds/ui_hacking_charenter_01.wav', False)
+        elif key in (curses.KEY_ENTER, 10, 13, 32):
             playsound('Sounds/ui_hacking_charenter_01.wav', False)
             return selectable[idx] if selectable else None
         elif key in (ord('q'), ord('Q'), 27, 9):  # ESC / q / Tab = back
+            playsound('Sounds/ui_hacking_charenter_01.wav', False)
             return "Back"
 
 def curses_input(stdscr, prompt):
@@ -227,10 +241,11 @@ def curses_pager(stdscr, text, title=""):
             break
 
 # ─── Data helpers ─────────────────────────────────────────────────────────────
-APPS_FILE    = Path("apps.json")
-GAMES_FILE   = Path("games.json")
-DOCS_FILE    = Path("documents.json")
-NETWORKS_FILE= Path("networks.json")
+APPS_FILE = Path("apps.json")
+GAMES_FILE = Path("games.json")
+DOCS_FILE = Path("documents.json")
+NETWORKS_FILE = Path("networks.json")
+SETTINGS_FILE = Path("settings.json")
 ALLOWED_EXTENSIONS = {".pdf", ".epub", ".txt", ".mobi", ".azw3"}
 
 def load_json(path):
@@ -241,18 +256,30 @@ def load_json(path):
 def save_json(path, data):
     path.write_text(json.dumps(data, indent=4))
 
-def load_apps():    return load_json(APPS_FILE)
-def save_apps(d):   save_json(APPS_FILE, d)
-def load_games():   return load_json(GAMES_FILE)
-def save_games(d):  save_json(GAMES_FILE, d)
-def load_networks():  return load_json(NETWORKS_FILE)
+def load_apps(): return load_json(APPS_FILE)
+def save_apps(d): save_json(APPS_FILE, d)
+def load_games(): return load_json(GAMES_FILE)
+def save_games(d): save_json(GAMES_FILE, d)
+def load_networks(): return load_json(NETWORKS_FILE)
 def save_networks(d): save_json(NETWORKS_FILE, d)
-def load_categories():  return load_json(DOCS_FILE)
+def load_categories(): return load_json(DOCS_FILE)
 def save_categories(d): save_json(DOCS_FILE, d)
+def load_settings(): return load_json(SETTINGS_FILE)
+def save_settings(d): save_json(SETTINGS_FILE, d)
 
 def scan_documents(folder: Path):
     return [f for f in folder.iterdir()
             if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS]
+
+_settings = load_settings()
+SOUND_ON = _settings.get("sound", True)
+def playsound(path, block=True):
+    if SOUND_ENABLED and SOUND_ON and _playsound_impl is not None:
+        try:
+            _playsound_impl(path, block)
+        except Exception:
+            pass
+
 
 # ─── Subprocess launcher (leaves curses, runs app, returns) ──────────────────
 def _suspend(stdscr):
@@ -532,10 +559,15 @@ def edit_menus_menu(stdscr):
             edit_games_menu(stdscr)
 
 def settings_menu(stdscr):
+    global SOUND_ON
     while True:
-        result = run_menu(stdscr, "Settings Menu", ["Edit Menus", "---", "Back"])
+        sound_label = "Sound: Enabled [toggle]" if SOUND_ON else "Sound: Disabled [toggle]"
+        result = run_menu(stdscr, "Settings Menu", [sound_label, "Edit Menus", "---", "Back"])
         if result == "Back":
             break
+        elif result == sound_label:
+            SOUND_ON = not SOUND_ON
+            save_settings({"sound": SOUND_ON})
         elif result == "Edit Menus":
             edit_menus_menu(stdscr)
 
@@ -660,7 +692,7 @@ def main(stdscr):
 
     while True:
         result = run_menu(stdscr, "Main Menu",
-                          ["Applications", "Documents", "Network", "Games", "---", "Settings", "Logout"])
+                          ["Applications", "Documents", "Network", "Games", "Command Line", "---", "Settings", "Logout"])
         if result == "Logout":
             playsound('Sounds/ui_hacking_passbad.wav', False)
             curses_message(stdscr, "Logging out...", 1)
@@ -673,6 +705,8 @@ def main(stdscr):
             games_menu(stdscr)
         elif result == "Network":
             network_menu(stdscr)
+        elif result == "Command Line":
+            launch_subprocess(stdscr, [shell])
         elif result == "Settings":
             settings_menu(stdscr)
 
