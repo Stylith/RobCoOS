@@ -4,7 +4,9 @@ import time
 import subprocess
 import json
 import shlex
+import random
 import curses
+import itertools
 import threading
 from pathlib import Path
 from datetime import date, datetime
@@ -130,7 +132,7 @@ def run_menu(stdscr, title, choices):
         elif key in (curses.KEY_ENTER, 10, 13):
             playsound('Sounds/ui_hacking_charenter_01.wav', False)
             return selectable[idx] if selectable else None
-        elif key in (ord('q'), ord('Q'), 27):  # ESC / q = back
+        elif key in (ord('q'), ord('Q'), 27, 9):  # ESC / q / Tab = back
             return "Back"
 
 def curses_input(stdscr, prompt):
@@ -221,7 +223,7 @@ def curses_pager(stdscr, text, title=""):
             offset -= 1
         elif key in (curses.KEY_DOWN, ord('j')) and offset < max(0, len(lines) - max_lines):
             offset += 1
-        elif key in (ord('q'), ord('Q'), 27, curses.KEY_ENTER, 10, 13):
+        elif key in (ord('q'), ord('Q'), 27, 9, curses.KEY_ENTER, 10, 13):
             break
 
 # ─── Data helpers ─────────────────────────────────────────────────────────────
@@ -557,28 +559,89 @@ def status_bar_thread():
 
 # ─── Boot animation (curses version) ─────────────────────────────────────────
 def bootup_curses(stdscr):
-    sequences = [
-        ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE", 0.02, 2),
-        ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT", 0.05, 2),
-        ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 0.02, 2),
-        ("LOGON ADMIN", 0.1, 3),
+    stdscr.nodelay(True)  # non-blocking getch
+
+    def skipped():
+        return stdscr.getch() == ord(' ')
+
+    sounds= [
+        'Sounds/ui_hacking_charsingle_01.wav',
+        'Sounds/ui_hacking_charsingle_02.wav',
+        'Sounds/ui_hacking_charsingle_03.wav',
+        'Sounds/ui_hacking_charsingle_04.wav',
+        'Sounds/ui_hacking_charsingle_05.wav',
     ]
-    for text, delay, pause in sequences:
+    random.shuffle(sounds)
+
+    # (text, char_delay, end_pause, centered)
+    sequences = [
+        ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE", 0.02, 2, False),
+        ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT", 0.05, 0.05, False),
+        ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 0.02, 2, False),
+        ("LOGON ADMIN", 0.1, 3, False),
+        ("ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM\nCOPYRIGHT 2075-2077 ROBCO INDUSTRIES\n-SERVER 1-", 0.05, 0.05, True),
+    ]
+    for (text, delay, pause, centered), sound in itertools.zip_longest(sequences, sounds):
+        if skipped():
+            break
         stdscr.erase()
-        row, col = 0, 0
-        for ch in text:
-            if ch == '\n':
-                row += 1; col = 0
-            else:
-                try:
-                    stdscr.addch(row, col, ch, curses.color_pair(COLOR_NORMAL))
-                    col += 1
-                except curses.error:
-                    pass
-            stdscr.refresh()
-            time.sleep(delay)
-        time.sleep(pause)
+        h, w = stdscr.getmaxyx()
+        text_lines = text.split("\n")
+        done = False
+
+        if centered:
+            # Calculate top-left starting position to center the block
+            start_row = 0
+            for li, line_text in enumerate(text_lines):
+                row = start_row + li
+                col = max(0, (w - len(line_text)) // 2)
+                for ch in line_text:
+                    if skipped():
+                        done = True
+                        break
+                    try:
+                        stdscr.addch(row, col, ch, curses.color_pair(COLOR_NORMAL))
+                        playsound('Sounds/ui_hacking_charscroll.wav', False)
+                        col += 1
+                    except curses.error:
+                        pass
+                    stdscr.refresh()
+                    time.sleep(delay)
+                if done:
+                    break
+        else:
+            row, col = 0, 0
+            for ch in text:
+                if skipped():
+                    done = True
+                    break
+                if ch == "\n":
+                    row += 1; col = 0
+                else:
+                    try:
+                        stdscr.addch(row, col, ch, curses.color_pair(COLOR_NORMAL))
+                        playsound(random.choice(sounds), False)
+                        col += 1
+                    except curses.error:
+                        pass
+                stdscr.refresh()
+                time.sleep(delay)
+
+        if done:
+            break
+        elapsed = 0
+        while elapsed < pause:
+            if skipped():
+                done = True
+                break
+            time.sleep(0.05)
+            elapsed += 0.05
+        if done:
+            break
         stdscr.erase()
+
+    stdscr.nodelay(False)
+    stdscr.erase()
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main(stdscr):
@@ -590,7 +653,7 @@ def main(stdscr):
     init_colors()
 
     # Uncomment to enable boot animation:
-    # bootup_curses(stdscr)
+    bootup_curses(stdscr)
 
     t = threading.Thread(target=status_bar_thread, daemon=True)
     t.start()
