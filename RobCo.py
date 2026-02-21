@@ -7,6 +7,7 @@ import shlex
 import curses
 import threading
 import pty
+import shutil
 import select
 import itertools
 import random
@@ -438,6 +439,99 @@ def delete_category(stdscr, categories):
     else:
         curses_message(stdscr, "Cancelled.", 0.8)
 
+#--------------------------App Store--------------------------------------------
+
+
+PACKAGE_MANAGERS = {
+    'brew':    [],
+    'apt':     ['-y'],
+    'apt-get': ['-y'],
+    'dnf':     ['-y'],
+    'pacman':  ['--noconfirm'],
+    'zypper':  ['-n'],
+}
+
+def detect_package_manager():
+    for pm in PACKAGE_MANAGERS:
+        if shutil.which(pm):
+            return pm
+    return None
+
+def is_installed(cmd):
+    return shutil.which(cmd) is not None
+
+def search_packages(pm, query):
+    try:
+        result = subprocess.run([pm, "search", query],
+                                capture_output=True, text=True, timeout=10)
+        lines = result.stdout.strip().split("\n")
+        return [l for l in lines if l.strip() and not l.startswith("=")]
+    except Exception:
+        return []
+
+def appstore_menu(stdscr):
+    pm = detect_package_manager()
+    MAX_PER_PAGE = 20
+
+    while True:
+        result = run_menu(stdscr, "Program Installer", ["Search", "---", "Back"],
+                          subtitle=f"Package Manager: {pm or 'Not Found'}")
+        if result == "Back":
+            break
+        elif result == "Search":
+            query = curses_input(stdscr, "Search packages:")
+            if not query:
+                continue
+
+            curses_message(stdscr, "Searching...", 0.5)
+            results = search_packages(pm, query)
+
+            if not results:
+                curses_message(stdscr, "No results found.")
+                continue
+
+            page = 0
+            while True:
+                start = page * MAX_PER_PAGE
+                end = start + MAX_PER_PAGE
+                page_results = results[start:end]
+                total_pages = (len(results) - 1) // MAX_PER_PAGE + 1
+
+                choices = []
+                for r in page_results:
+                    cmd = r.split()[0]
+                    status = "[installed]" if is_installed(cmd) else "[get]      "
+                    choices.append(f"{status} {r}")
+
+                if page > 0:
+                    choices.append("< Prev Page")
+                if end < len(results):
+                    choices.append("> Next Page")
+                choices += ["---", "Back"]
+
+                pkg_result = run_menu(stdscr, "Program Installer", choices,
+                                      subtitle=f"Results: {query}  |  Page {page + 1}/{total_pages}")
+                if pkg_result == "Back":
+                    break
+                elif pkg_result == "> Next Page":
+                    page += 1
+                elif pkg_result == "< Prev Page":
+                    page -= 1
+                else:
+                    pkg = pkg_result.split()[1]
+                    if is_installed(pkg):
+                        curses_message(stdscr, f"{pkg} is already installed.")
+                    elif pm is None:
+                        curses_message(stdscr, "Error: No supported package manager found.")
+                    else:
+                        if curses_confirm(stdscr, f"Install {pkg}?"):
+                            flags = PACKAGE_MANAGERS.get(pm, [])
+                            if pm == "brew":
+                                launch_cmd = [pm, "install"] + flags + [pkg]
+                            else:
+                                launch_cmd = ["sudo", pm, "install"] + flags + [pkg]
+                            launch_subprocess(stdscr, launch_cmd)
+        
 # ─── Menus ────────────────────────────────────────────────────────────────────
 def logs_menu(stdscr):
     while True:
@@ -801,7 +895,7 @@ def main(stdscr):
 
     while True:
         result = run_menu(stdscr, "Main Menu",
-                          ["Applications", "Documents", "Network", "Games", "Terminal",
+                          ["Applications", "Documents", "Network", "Games", "Program Installer", "Terminal",
                            "---", "Settings", "Logout"])
         if result == "Logout":
             playsound('Sounds/ui_hacking_passbad.wav', False)
@@ -815,6 +909,8 @@ def main(stdscr):
             games_menu(stdscr)
         elif result == "Network":
             network_menu(stdscr)
+        elif result == "Program Installer":
+            appstore_menu(stdscr)
         elif result == "Terminal":
             embedded_terminal(stdscr)
         elif result == "Settings":
