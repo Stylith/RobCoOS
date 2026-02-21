@@ -39,6 +39,7 @@ def save_settings(d): save_json(SETTINGS_FILE, d)
 _settings = load_settings()
 SOUND_ON = _settings.get("sound", True)
 BOOTUP_ON = _settings.get("bootup", True)
+CURRENT_THEME = _settings.get("theme", "Green")
 
 def playsound(path, block=True):
     if SOUND_ENABLED and SOUND_ON and _playsound_impl is not None:
@@ -58,15 +59,25 @@ COLOR_SELECTED = 2
 COLOR_TITLE    = 3
 COLOR_STATUS   = 4
 COLOR_DIM      = 5
+THEMES = {
+    "Green (Default)": (curses.COLOR_GREEN,   -1),
+    "White":      (curses.COLOR_WHITE,   -1),
+    "Amber":      (curses.COLOR_YELLOW,  -1),
+    "Blue":       (curses.COLOR_BLUE,    -1),
+    "Red":        (curses.COLOR_RED,     -1),
+    "Purple":     (curses.COLOR_MAGENTA, -1),
+    "Light Blue": (curses.COLOR_CYAN,    -1),
+}
 
 def init_colors():
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(COLOR_NORMAL,   curses.COLOR_GREEN, -1)
-    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, curses.COLOR_GREEN)
-    curses.init_pair(COLOR_TITLE,    curses.COLOR_GREEN, -1)
-    curses.init_pair(COLOR_STATUS,   curses.COLOR_BLACK, curses.COLOR_GREEN)
-    curses.init_pair(COLOR_DIM,      curses.COLOR_GREEN, -1)
+    fg, bg = THEMES.get(CURRENT_THEME, THEMES["Green (Default)"])
+    curses.init_pair(COLOR_NORMAL,   fg,              bg)
+    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, fg)
+    curses.init_pair(COLOR_TITLE,    fg,              bg)
+    curses.init_pair(COLOR_STATUS,   curses.COLOR_BLACK, fg)
+    curses.init_pair(COLOR_DIM,      fg,              bg)
 
 # ─── Drawing helpers ──────────────────────────────────────────────────────────
 HEADER_LINES = [
@@ -550,6 +561,14 @@ def edit_menus_menu(stdscr):
         elif result == "Edit Games":
             edit_games_menu(stdscr)
 
+def theme_menu(stdscr):
+    global CURRENT_THEME
+    result = run_menu(stdscr, "Select Theme", list(THEMES.keys()) + ["---", "Back"])
+    if result != "Back" and result in THEMES:
+        CURRENT_THEME = result
+        save_settings({"sound": SOUND_ON, "bootup": BOOTUP_ON, "theme": CURRENT_THEME})
+        init_colors()
+
 # ─── Embedded terminal ────────────────────────────────────────────────────────
 def embedded_terminal(stdscr):
     global status_paused
@@ -589,7 +608,7 @@ def embedded_terminal(stdscr):
 
             # Header
             try:
-                stdscr.addstr(0, 0, " ROBCO TERMLINK ".center(w - 1),
+                stdscr.addstr(0, 0, " ROBCO MAINTENANCE TERMLINK ".center(w - 1),
                               curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
             except curses.error:
                 pass
@@ -638,17 +657,19 @@ def settings_menu(stdscr):
         sound_label = "Sound: ON  [toggle]" if SOUND_ON else "Sound: OFF [toggle]"
         bootup_label = "Bootup: ON [toggle]" if BOOTUP_ON else "Bootup: OFF [toggle]"
         result = run_menu(stdscr, "Settings Menu",
-                          ["Edit Menus", bootup_label, sound_label, "---", "Back"])
+                          ["Theme", "Edit Menus", bootup_label, sound_label, "---", "Back"])
         if result == "Back":
             break
         elif result == "Edit Menus":
             edit_menus_menu(stdscr)
+        elif result == "Theme":
+            theme_menu(stdscr)
         elif result == sound_label:
             SOUND_ON = not SOUND_ON
-            save_settings({"sound": SOUND_ON, "bootup" : BOOTUP_ON})
+            save_settings({"sound": SOUND_ON, "bootup": BOOTUP_ON, "theme": CURRENT_THEME})
         elif result == bootup_label:
             BOOTUP_ON = not BOOTUP_ON
-            save_settings({"sound": SOUND_ON, "bootup" : BOOTUP_ON})
+            save_settings({"sound": SOUND_ON, "bootup": BOOTUP_ON, "theme": CURRENT_THEME})
 
 
 
