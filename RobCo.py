@@ -131,7 +131,7 @@ def draw_menu_title(win, title, row):
         pass
 
 # ─── Generic curses menu ──────────────────────────────────────────────────────
-def run_menu(stdscr, title, choices):
+def run_menu(stdscr, title, choices, subtitle=""):
     selectable = [c for c in choices if c != "---"]
     idx = 0
 
@@ -142,8 +142,13 @@ def run_menu(stdscr, title, choices):
         draw_separator(stdscr, 4, w)
         draw_menu_title(stdscr, title, 5)
         draw_separator(stdscr, 6, w)
+        if subtitle:
+            try:
+                stdscr.addstr(8, 6, subtitle, curses.color_pair(COLOR_DIM) | curses.A_UNDERLINE)
+            except curses.error:
+                pass
 
-        start_row = 8
+        start_row = 10 if subtitle else 9
         for di, choice in enumerate(choices):
             row = start_row + di
             if row >= h - 2:
@@ -451,7 +456,7 @@ def apps_menu(stdscr):
     while True:
         apps = load_apps()
         choices = list(apps.keys()) + ["---", "Back"]
-        result = run_menu(stdscr, "Applications Menu", choices)
+        result = run_menu(stdscr, "Applications Menu", choices, subtitle="Select App")
         if result == "Back":
             break
         elif result in apps:
@@ -461,7 +466,7 @@ def games_menu(stdscr):
     while True:
         games = load_games()
         choices = list(games.keys()) + ["---", "Back"]
-        result = run_menu(stdscr, "Games Menu", choices)
+        result = run_menu(stdscr, "Games Menu", choices, subtitle="Select Game")
         if result == "Back":
             break
         elif result in games:
@@ -471,7 +476,7 @@ def network_menu(stdscr):
     while True:
         networks = load_networks()
         choices = list(networks.keys()) + ["---", "Back"]
-        result = run_menu(stdscr, "Network Menu", choices)
+        result = run_menu(stdscr, "Network Menu", choices, subtitle="Select Network Program")
         if result == "Back":
             break
         elif result in networks:
@@ -481,7 +486,7 @@ def documents_menu(stdscr):
     while True:
         categories = load_categories()
         choices = ["Logs"] + list(categories.keys()) + ["---", "Back"]
-        result = run_menu(stdscr, "Documents Menu", choices)
+        result = run_menu(stdscr, "Documents Menu", choices, subtitle="Select Document Type")
         if result == "Back":
             break
         elif result == "Logs":
@@ -495,7 +500,7 @@ def documents_menu(stdscr):
                     break
                 files.sort(key=lambda f: f.stem.lower())
                 file_map = {f.stem.replace("_", " "): f for f in files}
-                file_result = run_menu(stdscr, result, list(file_map.keys()) + ["Back"])
+                file_result = run_menu(stdscr, result, list(file_map.keys()) + ["Back"], subtitle=f"Select {result}")
                 if file_result == "Back":
                     break
                 if file_result in file_map:
