@@ -4,15 +4,17 @@ import time
 import subprocess
 import json
 import shlex
-import random
 import curses
-import itertools
 import threading
-import psutil
+import pty
+import select
+import itertools
+import random
+import pyte
 from pathlib import Path
 from datetime import date, datetime
 
-# Try playsound - make it optional
+# ─── Sound ────────────────────────────────────────────────────────────────────
 try:
     from playsound import playsound as _playsound_impl
     SOUND_ENABLED = True
@@ -20,11 +22,34 @@ except ImportError:
     SOUND_ENABLED = False
     _playsound_impl = None
 
+SETTINGS_FILE = Path("settings.json")
+
+def load_json(path):
+    if path.exists():
+        return json.loads(path.read_text())
+    return {}
+
+def save_json(path, data):
+    path.write_text(json.dumps(data, indent=4))
+
+def load_settings(): return load_json(SETTINGS_FILE)
+def save_settings(d): save_json(SETTINGS_FILE, d)
+
+_settings = load_settings()
+SOUND_ON = _settings.get("sound", True)
+BOOTUP_ON = _settings.get("bootup", True)
+
+def playsound(path, block=True):
+    if SOUND_ENABLED and SOUND_ON and _playsound_impl is not None:
+        try:
+            _playsound_impl(path, block)
+        except Exception:
+            pass
+
+# ─── Base dir ─────────────────────────────────────────────────────────────────
 base_dir = Path(__file__).resolve().parent
 if base_dir.is_dir():
     os.chdir(base_dir)
-
-shell = os.environ.get("SHELL", "/bin/bash")
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 COLOR_NORMAL   = 1
@@ -36,11 +61,11 @@ COLOR_DIM      = 5
 def init_colors():
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(COLOR_NORMAL,   curses.COLOR_GREEN,  -1)
-    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK,  curses.COLOR_GREEN)
-    curses.init_pair(COLOR_TITLE,    curses.COLOR_GREEN,  -1)
-    curses.init_pair(COLOR_STATUS,   curses.COLOR_BLACK,  curses.COLOR_GREEN)
-    curses.init_pair(COLOR_DIM,      curses.COLOR_GREEN,  -1)
+    curses.init_pair(COLOR_NORMAL,   curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, curses.COLOR_GREEN)
+    curses.init_pair(COLOR_TITLE,    curses.COLOR_GREEN, -1)
+    curses.init_pair(COLOR_STATUS,   curses.COLOR_BLACK, curses.COLOR_GREEN)
+    curses.init_pair(COLOR_DIM,      curses.COLOR_GREEN, -1)
 
 # ─── Drawing helpers ──────────────────────────────────────────────────────────
 HEADER_LINES = [
@@ -60,20 +85,11 @@ def draw_header(win):
 
 def draw_status(win):
     h, w = win.getmaxyx()
-    now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
-    status = f"{now} "
-    status = status.ljust(w)[:w-1]
-    battery = psutil.sensors_battery()
-    batt_percent = battery.percent
-    batt_status = f"{batt_percent} %"
+    now = datetime.now().strftime("%H:%M:%S")
+    status = f" ROBCO SYSTEM ACTIVE | {now} "
+    status = status.ljust(w)[:w - 1]
     try:
-        win.addstr(h-1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
-    except curses.error:
-        pass
-    try:
-        if battery is None:
-            batt_status = ""
-        win.addstr(h-1, w - 2 - len(batt_status), batt_status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        win.addstr(h - 1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
     except curses.error:
         pass
 
@@ -95,13 +111,8 @@ def draw_menu_title(win, title, row):
 
 # ─── Generic curses menu ──────────────────────────────────────────────────────
 def run_menu(stdscr, title, choices):
-    """
-    Display a menu and return the selected string.
-    Filters out "---" from navigation (shown but not selectable).
-    Returns the chosen string.
-    """
     selectable = [c for c in choices if c != "---"]
-    idx = 0  # index into selectable list
+    idx = 0
 
     while True:
         stdscr.erase()
@@ -111,24 +122,20 @@ def run_menu(stdscr, title, choices):
         draw_menu_title(stdscr, title, 5)
         draw_separator(stdscr, 6, w)
 
-        # Build display list (choices including "---")
         start_row = 8
-        sel_display_idx = choices.index(selectable[idx]) if selectable else 0
-
         for di, choice in enumerate(choices):
             row = start_row + di
             if row >= h - 2:
                 break
             is_sep = choice == "---"
-            is_selected = (choice == selectable[idx]) if not is_sep else False
+            is_selected = (not is_sep) and (choice == selectable[idx])
             prefix = "  > " if is_selected else "    "
             text = prefix + choice
-            attr = curses.color_pair(COLOR_DIM) if is_sep else (
-                curses.color_pair(COLOR_SELECTED) | curses.A_BOLD if is_selected
-                else curses.color_pair(COLOR_NORMAL)
-            )
+            attr = (curses.color_pair(COLOR_DIM) if is_sep else
+                    curses.color_pair(COLOR_SELECTED) | curses.A_BOLD if is_selected else
+                    curses.color_pair(COLOR_NORMAL))
             try:
-                stdscr.addstr(row, 2, text[:w-4], attr)
+                stdscr.addstr(row, 2, text[:w - 4], attr)
             except curses.error:
                 pass
 
@@ -137,22 +144,22 @@ def run_menu(stdscr, title, choices):
 
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord('k')):
+            playsound('Sounds/ui_hacking_charenter_01.wav', False)
             idx = (idx - 1) % len(selectable) if selectable else 0
-            playsound('Sounds/ui_hacking_charenter_01.wav', False)
         elif key in (curses.KEY_DOWN, ord('j')):
-            idx = (idx + 1) % len(selectable) if selectable else 0
             playsound('Sounds/ui_hacking_charenter_01.wav', False)
+            idx = (idx + 1) % len(selectable) if selectable else 0
         elif key in (curses.KEY_ENTER, 10, 13, 32):
             playsound('Sounds/ui_hacking_charenter_01.wav', False)
             return selectable[idx] if selectable else None
-        elif key in (ord('q'), ord('Q'), 27, 9):  # ESC / q / Tab = back
+        elif key in (ord('q'), ord('Q'), 27, 9):
             playsound('Sounds/ui_hacking_charenter_01.wav', False)
             return "Back"
 
+# ─── Input helpers ────────────────────────────────────────────────────────────
 def curses_input(stdscr, prompt):
     global status_paused
     status_paused = True
-    """Simple single-line input at the bottom of the screen."""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     draw_header(stdscr)
@@ -176,19 +183,19 @@ def curses_input(stdscr, prompt):
 def curses_confirm(stdscr, message):
     global status_paused
     status_paused = True
-    """Returns True if user confirms with 'y'."""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     draw_header(stdscr)
+    full = message + " (y/n): "
     try:
-        stdscr.addstr(5, 2, message + " (y/n): ", curses.color_pair(COLOR_NORMAL))
+        stdscr.addstr(5, 2, full, curses.color_pair(COLOR_NORMAL))
     except curses.error:
         pass
     curses.echo()
     curses.curs_set(1)
     stdscr.refresh()
     try:
-        ans = stdscr.getstr(5, 2 + len(message) + 9, 3).decode("utf-8").strip().lower()
+        ans = stdscr.getstr(5, 2 + len(full), 3).decode("utf-8").strip().lower()
     except Exception:
         ans = ""
     curses.noecho()
@@ -197,7 +204,6 @@ def curses_confirm(stdscr, message):
     return ans == "y"
 
 def curses_message(stdscr, message, delay=1.5):
-    """Show a message briefly."""
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     draw_header(stdscr)
@@ -210,7 +216,6 @@ def curses_message(stdscr, message, delay=1.5):
     time.sleep(delay)
 
 def curses_pager(stdscr, text, title=""):
-    """Simple pager for viewing text."""
     lines = text.split("\n")
     offset = 0
     while True:
@@ -220,14 +225,14 @@ def curses_pager(stdscr, text, title=""):
         if title:
             draw_menu_title(stdscr, title, 4)
         max_lines = h - 8
-        for i, line in enumerate(lines[offset:offset+max_lines]):
+        for i, line in enumerate(lines[offset:offset + max_lines]):
             try:
-                stdscr.addstr(5 + i, 2, line[:w-4], curses.color_pair(COLOR_NORMAL))
+                stdscr.addstr(5 + i, 2, line[:w - 4], curses.color_pair(COLOR_NORMAL))
             except curses.error:
                 pass
-        nav = "↑↓ scroll  q=quit"
+        nav = "up/down scroll  q/tab=back"
         try:
-            stdscr.addstr(h-2, 2, nav, curses.color_pair(COLOR_DIM))
+            stdscr.addstr(h - 2, 2, nav, curses.color_pair(COLOR_DIM))
         except curses.error:
             pass
         draw_status(stdscr)
@@ -241,53 +246,32 @@ def curses_pager(stdscr, text, title=""):
             break
 
 # ─── Data helpers ─────────────────────────────────────────────────────────────
-APPS_FILE = Path("apps.json")
-GAMES_FILE = Path("games.json")
-DOCS_FILE = Path("documents.json")
+APPS_FILE     = Path("apps.json")
+GAMES_FILE    = Path("games.json")
+DOCS_FILE     = Path("documents.json")
 NETWORKS_FILE = Path("networks.json")
-SETTINGS_FILE = Path("settings.json")
 ALLOWED_EXTENSIONS = {".pdf", ".epub", ".txt", ".mobi", ".azw3"}
 
-def load_json(path):
-    if path.exists():
-        return json.loads(path.read_text())
-    return {}
-
-def save_json(path, data):
-    path.write_text(json.dumps(data, indent=4))
-
-def load_apps(): return load_json(APPS_FILE)
-def save_apps(d): save_json(APPS_FILE, d)
-def load_games(): return load_json(GAMES_FILE)
-def save_games(d): save_json(GAMES_FILE, d)
-def load_networks(): return load_json(NETWORKS_FILE)
-def save_networks(d): save_json(NETWORKS_FILE, d)
-def load_categories(): return load_json(DOCS_FILE)
+def load_apps():        return load_json(APPS_FILE)
+def save_apps(d):       save_json(APPS_FILE, d)
+def load_games():       return load_json(GAMES_FILE)
+def save_games(d):      save_json(GAMES_FILE, d)
+def load_networks():    return load_json(NETWORKS_FILE)
+def save_networks(d):   save_json(NETWORKS_FILE, d)
+def load_categories():  return load_json(DOCS_FILE)
 def save_categories(d): save_json(DOCS_FILE, d)
-def load_settings(): return load_json(SETTINGS_FILE)
-def save_settings(d): save_json(SETTINGS_FILE, d)
 
 def scan_documents(folder: Path):
     return [f for f in folder.iterdir()
             if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS]
 
-_settings = load_settings()
-SOUND_ON = _settings.get("sound", True)
-def playsound(path, block=True):
-    if SOUND_ENABLED and SOUND_ON and _playsound_impl is not None:
-        try:
-            _playsound_impl(path, block)
-        except Exception:
-            pass
-
-
-# ─── Subprocess launcher (leaves curses, runs app, returns) ──────────────────
+# ─── Subprocess launcher ──────────────────────────────────────────────────────
 def _suspend(stdscr):
     global status_paused
-    status_paused = True        # stop status thread from touching screen
-    time.sleep(1.1)             # let any in-flight status write finish
-    curses.endwin()             # restore terminal — let subprocess set its own mode
-    os.system('tput reset')     # full terminal reset: restores size, capabilities, clears screen
+    status_paused = True
+    time.sleep(1.1)
+    curses.endwin()
+    os.system('tput reset')
 
 def _resume(stdscr):
     global status_paused
@@ -298,10 +282,10 @@ def _resume(stdscr):
     curses.curs_set(0)
     stdscr.keypad(True)
     init_colors()
-    stdscr.clearok(True)        # force full redraw ignoring what curses thinks is on screen
+    stdscr.clearok(True)
     stdscr.clear()
     stdscr.refresh()
-    status_paused = False       # re-enable status thread
+    status_paused = False
 
 def launch_subprocess(stdscr, cmd):
     _suspend(stdscr)
@@ -325,7 +309,7 @@ def journal_new(stdscr):
     x = Path("journal_entries")
     x.mkdir(exist_ok=True)
     status_paused = True
-    text = curses_input(stdscr, f"New Entry — {current_date}")
+    text = curses_input(stdscr, f"New Entry - {current_date}")
     status_paused = False
     if text:
         file_name = x / f"{current_date}.txt"
@@ -349,7 +333,8 @@ def journal_view(stdscr):
         if result == "Back":
             break
         if result in file_map:
-            launch_vim(stdscr, file_map[result])
+            text = file_map[result].read_text()
+            curses_pager(stdscr, text, title=result)
 
 def journal_delete(stdscr):
     directory_path = Path("journal_entries")
@@ -366,10 +351,10 @@ def journal_delete(stdscr):
     if result == "Back" or result not in file_map:
         return
     if curses_confirm(stdscr, f"Delete '{result}'?"):
-        subprocess.run(['rm', str(file_map[result])])
+        file_map[result].unlink()
         curses_message(stdscr, f"Deleted {result}.")
 
-# ─── Generic add/delete for apps/games/networks ──────────────────────────────
+# ─── Generic add/delete ───────────────────────────────────────────────────────
 def add_entry(stdscr, data, save_fn, kind="App"):
     name = curses_input(stdscr, f"Enter {kind} display name:")
     if not name:
@@ -398,7 +383,6 @@ def delete_entry(stdscr, data, save_fn, kind="App"):
     else:
         curses_message(stdscr, "Cancelled.", 0.8)
 
-# ─── Documents ───────────────────────────────────────────────────────────────
 def add_category(stdscr, categories):
     name = curses_input(stdscr, "Enter category name:")
     if not name:
@@ -431,7 +415,8 @@ def delete_category(stdscr, categories):
 # ─── Menus ────────────────────────────────────────────────────────────────────
 def logs_menu(stdscr):
     while True:
-        result = run_menu(stdscr, "Logs Menu", ["Create New Log", "View Logs", "Delete Logs", "Back"])
+        result = run_menu(stdscr, "Logs Menu",
+                          ["Create New Log", "View Logs", "Delete Logs", "Back"])
         if result == "Back":
             break
         elif result == "Create New Log":
@@ -497,56 +482,53 @@ def documents_menu(stdscr):
 
 def edit_apps_menu(stdscr):
     while True:
-        result = run_menu(stdscr, "Edit Applications", ["Add App", "Delete App", "---", "Back"])
+        result = run_menu(stdscr, "Edit Applications",
+                          ["Add App", "Delete App", "---", "Back"])
         if result == "Back":
             break
         elif result == "Add App":
-            apps = load_apps()
-            add_entry(stdscr, apps, save_apps, "App")
+            add_entry(stdscr, load_apps(), save_apps, "App")
         elif result == "Delete App":
-            apps = load_apps()
-            delete_entry(stdscr, apps, save_apps, "App")
+            delete_entry(stdscr, load_apps(), save_apps, "App")
 
 def edit_games_menu(stdscr):
     while True:
-        result = run_menu(stdscr, "Edit Games", ["Add Game", "Delete Game", "---", "Back"])
+        result = run_menu(stdscr, "Edit Games",
+                          ["Add Game", "Delete Game", "---", "Back"])
         if result == "Back":
             break
         elif result == "Add Game":
-            games = load_games()
-            add_entry(stdscr, games, save_games, "Game")
+            add_entry(stdscr, load_games(), save_games, "Game")
         elif result == "Delete Game":
-            games = load_games()
-            delete_entry(stdscr, games, save_games, "Game")
+            delete_entry(stdscr, load_games(), save_games, "Game")
 
 def edit_network_menu(stdscr):
     while True:
-        result = run_menu(stdscr, "Edit Network", ["Add Network", "Delete Network", "---", "Back"])
+        result = run_menu(stdscr, "Edit Network",
+                          ["Add Network", "Delete Network", "---", "Back"])
         if result == "Back":
             break
         elif result == "Add Network":
-            networks = load_networks()
-            add_entry(stdscr, networks, save_networks, "Network Program")
+            add_entry(stdscr, load_networks(), save_networks, "Network Program")
         elif result == "Delete Network":
-            networks = load_networks()
-            delete_entry(stdscr, networks, save_networks, "Network Program")
+            delete_entry(stdscr, load_networks(), save_networks, "Network Program")
 
 def edit_documents_menu(stdscr):
     while True:
-        result = run_menu(stdscr, "Edit Documents", ["Add Category", "Delete Category", "---", "Back"])
+        result = run_menu(stdscr, "Edit Documents",
+                          ["Add Category", "Delete Category", "---", "Back"])
         if result == "Back":
             break
         elif result == "Add Category":
-            categories = load_categories()
-            add_category(stdscr, categories)
+            add_category(stdscr, load_categories())
         elif result == "Delete Category":
-            categories = load_categories()
-            delete_category(stdscr, categories)
+            delete_category(stdscr, load_categories())
 
 def edit_menus_menu(stdscr):
     while True:
         result = run_menu(stdscr, "Edit Menus",
-                          ["Edit Applications", "Edit Documents", "Edit Network", "Edit Games", "---", "Back"])
+                          ["Edit Applications", "Edit Documents",
+                           "Edit Network", "Edit Games", "---", "Back"])
         if result == "Back":
             break
         elif result == "Edit Applications":
@@ -558,18 +540,107 @@ def edit_menus_menu(stdscr):
         elif result == "Edit Games":
             edit_games_menu(stdscr)
 
+# ─── Embedded terminal ────────────────────────────────────────────────────────
+def embedded_terminal(stdscr):
+    global status_paused
+    status_paused = True
+
+    shell = os.environ.get("SHELL", "/bin/bash")
+    h, w = stdscr.getmaxyx()
+
+    env = os.environ.copy()
+    env["PS1"] = "> "
+    env["ZDOTDIR"] = "/dev/null"
+
+    screen = pyte.Screen(w, h - 2)
+    stream = pyte.ByteStream(screen)
+
+    pid, fd = pty.fork()
+
+    if pid == 0:
+        os.execvpe(shell, [shell, "--no-rcs", "-f"], env)
+    else:
+        stdscr.keypad(False)
+        stdscr.nodelay(True)
+
+        while True:
+            h, w = stdscr.getmaxyx()
+            screen.resize(h - 2, w)
+
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    data = os.read(fd, 1024)
+                    stream.feed(data)
+                except OSError:
+                    break
+
+            stdscr.erase()
+
+            # Header
+            try:
+                stdscr.addstr(0, 0, " ROBCO TERMLINK ".center(w - 1),
+                              curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
+            except curses.error:
+                pass
+
+            # Terminal output offset by 1 for header
+            for row_idx, row in enumerate(screen.display):
+                try:
+                    stdscr.addstr(row_idx + 1, 0, row[:w - 1])
+                except curses.error:
+                    pass
+
+            # Footer
+            try:
+                stdscr.addstr(h - 1, 0, " CTRL+X TO EXIT ".ljust(w - 1),
+                              curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+            except curses.error:
+                pass
+
+            # Cursor position
+            try:
+                stdscr.move(screen.cursor.y + 1, screen.cursor.x)
+            except curses.error:
+                pass
+
+            stdscr.refresh()
+
+            key = stdscr.getch()
+            if key == 24:  # Ctrl+X
+                os.kill(pid, 9)
+                break
+            elif key != -1:
+                if key < 256:
+                    os.write(fd, bytes([key]))
+                else:
+                    os.write(fd, curses.keyname(key))
+
+        os.waitpid(pid, 0)
+        stdscr.keypad(True)
+        stdscr.nodelay(False)
+        status_paused = False
+
+# ─── Settings ─────────────────────────────────────────────────────────────────
 def settings_menu(stdscr):
-    global SOUND_ON
+    global SOUND_ON, BOOTUP_ON
     while True:
-        sound_label = "Sound: Enabled [toggle]" if SOUND_ON else "Sound: Disabled [toggle]"
-        result = run_menu(stdscr, "Settings Menu", [sound_label, "Edit Menus", "---", "Back"])
+        sound_label = "Sound: ON  [toggle]" if SOUND_ON else "Sound: OFF [toggle]"
+        bootup_label = "Bootup: ON [toggle]" if BOOTUP_ON else "Bootup: OFF [toggle]"
+        result = run_menu(stdscr, "Settings Menu",
+                          ["Edit Menus", bootup_label, sound_label, "---", "Back"])
         if result == "Back":
             break
-        elif result == sound_label:
-            SOUND_ON = not SOUND_ON
-            save_settings({"sound": SOUND_ON})
         elif result == "Edit Menus":
             edit_menus_menu(stdscr)
+        elif result == sound_label:
+            SOUND_ON = not SOUND_ON
+            save_settings({"sound": SOUND_ON, "bootup" : BOOTUP_ON})
+        elif result == bootup_label:
+            BOOTUP_ON = not BOOTUP_ON
+            save_settings({"sound": SOUND_ON, "bootup" : BOOTUP_ON})
+
+
 
 # ─── Status bar thread ────────────────────────────────────────────────────────
 status_running = True
@@ -589,9 +660,9 @@ def status_bar_thread():
             except Exception:
                 pass
 
-# ─── Boot animation (curses version) ─────────────────────────────────────────
+# ─── Boot animation ───────────────────────────────────────────────────────────
 def bootup_curses(stdscr):
-    stdscr.nodelay(True)  # non-blocking getch
+    stdscr.nodelay(True)
 
     def skipped():
         return stdscr.getch() == ord(' ')
@@ -608,11 +679,12 @@ def bootup_curses(stdscr):
     # (text, char_delay, end_pause, centered)
     sequences = [
         ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE", 0.02, 2, False),
-        ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT", 0.05, 0.05, False),
+        ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT", 0.05, 2, False),
         ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 0.02, 2, False),
         ("LOGON ADMIN", 0.1, 3, False),
-        ("ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM\nCOPYRIGHT 2075-2077 ROBCO INDUSTRIES\n-SERVER 1-", 0.05, 0.05, True),
+        ("ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM\nCOPYRIGHT 2075-2077 ROBCO INDUSTRIES\n-SERVER 1-", 0.05, 2, True),
     ]
+
     for (text, delay, pause, centered), sound in itertools.zip_longest(sequences, sounds):
         if skipped():
             break
@@ -622,7 +694,6 @@ def bootup_curses(stdscr):
         done = False
 
         if centered:
-            # Calculate top-left starting position to center the block
             start_row = 0
             for li, line_text in enumerate(text_lines):
                 row = start_row + li
@@ -648,7 +719,8 @@ def bootup_curses(stdscr):
                     done = True
                     break
                 if ch == "\n":
-                    row += 1; col = 0
+                    row += 1
+                    col = 0
                 else:
                     try:
                         stdscr.addch(row, col, ch, curses.color_pair(COLOR_NORMAL))
@@ -672,6 +744,8 @@ def bootup_curses(stdscr):
             break
         stdscr.erase()
 
+    playsound('Sounds/ui_hacking_passgood.wav')
+
     stdscr.nodelay(False)
     stdscr.erase()
 
@@ -684,15 +758,16 @@ def main(stdscr):
     stdscr.keypad(True)
     init_colors()
 
-    # Uncomment to enable boot animation:
-    bootup_curses(stdscr)
+    if BOOTUP_ON:
+        bootup_curses(stdscr)
 
     t = threading.Thread(target=status_bar_thread, daemon=True)
     t.start()
 
     while True:
         result = run_menu(stdscr, "Main Menu",
-                          ["Applications", "Documents", "Network", "Games", "Command Line", "---", "Settings", "Logout"])
+                          ["Applications", "Documents", "Network", "Games", "Terminal",
+                           "---", "Settings", "Logout"])
         if result == "Logout":
             playsound('Sounds/ui_hacking_passbad.wav', False)
             curses_message(stdscr, "Logging out...", 1)
@@ -705,16 +780,14 @@ def main(stdscr):
             games_menu(stdscr)
         elif result == "Network":
             network_menu(stdscr)
-        elif result == "Command Line":
-            launch_subprocess(stdscr, [shell])
+        elif result == "Terminal":
+            embedded_terminal(stdscr)
         elif result == "Settings":
             settings_menu(stdscr)
 
-    # Stop status thread before curses tears down
     status_running = False
     _stdscr_ref = None
     t.join(timeout=2)
-    # Cleanup handled by finally block in __main__
 
 if __name__ == "__main__":
     stdscr = curses.initscr()
