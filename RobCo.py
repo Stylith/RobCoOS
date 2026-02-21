@@ -475,6 +475,14 @@ PACKAGE_MANAGERS = {
     'zypper':  ['-n'],
 }
 
+def has_internet():
+    try:
+        import urllib.request
+        urllib.request.urlopen("https://www.google.com", timeout=3)
+        return True
+    except Exception:
+        return False
+
 def detect_package_manager():
     for pm in PACKAGE_MANAGERS:
         if shutil.which(pm):
@@ -534,12 +542,30 @@ def get_package_info(pm, pkg):
     except Exception:
         return "Could not fetch description."
 
+def get_installed_packages(pm):
+    try:
+        if pm == "brew":
+            result = subprocess.run(["brew", "list"], capture_output=True, text=True, timeout=10)
+        elif pm in ("apt", "apt-get"):
+            result = subprocess.run(["apt", "list", "--installed"], capture_output=True, text=True, timeout=10)
+        elif pm == "dnf":
+            result = subprocess.run(["dnf", "list", "installed"], capture_output=True, text=True, timeout=10)
+        elif pm == "pacman":
+            result = subprocess.run(["pacman", "-Q"], capture_output=True, text=True, timeout=10)
+        elif pm == "zypper":
+            result = subprocess.run(["zypper", "se", "--installed-only"], capture_output=True, text=True, timeout=10)
+        else:
+            return []
+        return [l.split()[0] for l in result.stdout.strip().split("\n") if l.strip() and not l.startswith("WARNING")]
+    except Exception:
+        return []
+
 def appstore_menu(stdscr):
     pm = detect_package_manager()
     MAX_PER_PAGE = 20
 
     while True:
-        result = run_menu(stdscr, "Program Installer", ["Search", "---", "Back"],
+        result = run_menu(stdscr, "Program Installer", ["Search", "Installed Apps", "---", "Back"],
                           subtitle=f"Package Manager: {pm or 'Not Found'}")
         if result == "Back":
             break
@@ -547,7 +573,9 @@ def appstore_menu(stdscr):
             query = curses_input(stdscr, "Search packages:")
             if not query:
                 continue
-
+            if not has_internet():
+                curses_message(stdscr, "Error: No internet connection")
+                continue
             curses_message(stdscr, "Searching...", 0.5)
             results = search_packages(pm, query)
 
@@ -589,7 +617,7 @@ def appstore_menu(stdscr):
                     elif pm is None:
                         curses_message(stdscr, "Error: No supported package manager found.")
                     else:
-                        info = get_package_info(pm, pkg)
+                        info = get_package_info(pm, pkg) if has_internet() else "No internet - description unavailable."
                         curses_pager(stdscr, f"{pkg}\n\n{info}", title="Package Info")
                         if curses_confirm(stdscr, f"Install {pkg}?"):
                             flags = PACKAGE_MANAGERS.get(pm, [])
@@ -604,6 +632,79 @@ def appstore_menu(stdscr):
                                 curses_box_message(stdscr, f"{pkg} installed successfully!")
                             else:
                                 curses_box_message(stdscr, f"Failed to install {pkg}.")
+
+        elif result == "Installed Apps":
+            curses_message(stdscr, "Loading...", 0.5)
+            installed = get_installed_packages(pm)
+            if not installed:
+                curses_message(stdscr, "No installed packages found.")
+                continue
+            filter_query = ""
+            page = 0
+            while True:
+                h, w = stdscr.getmaxyx()
+                max_items = max(3, h - 18)
+                filtered = [p for p in installed if filter_query.lower() in p.lower()] if filter_query else installed
+                start = page * max_items
+                end = start + max_items
+                page_results = filtered[start:end]
+                total_pages = max(1, (len(filtered) - 1) // max_items + 1)
+
+                search_label = f"Search: {filter_query}" if filter_query else "Search..."
+                choices = [search_label, "---"] + [f"  {p}" for p in page_results]
+                if page > 0:
+                    choices.append("< Prev Page")
+                if end < len(filtered):
+                    choices.append("> Next Page")
+                choices += ["---", "Back"]
+
+                pkg_result = run_menu(stdscr, "Installed Apps", choices,
+                                      subtitle=f"{len(filtered)} packages  |  Page {page + 1}/{total_pages}")
+                if pkg_result == "Back":
+                    break
+                elif pkg_result == "> Next Page":
+                    page += 1
+                elif pkg_result == "< Prev Page":
+                    page -= 1
+                elif pkg_result == search_label:
+                    filter_query = curses_input(stdscr, "Filter packages:")
+                    page = 0
+                else:
+                    pkg = pkg_result.strip()
+                    info = get_package_info(pm, pkg) if has_internet() else "No internet - description unavailable."
+                    action = run_menu(stdscr, pkg, ["Update", "Uninstall", "---", "Back"],
+                                      subtitle=info)
+                    if action == "Uninstall":
+                        if curses_confirm(stdscr, f"Uninstall {pkg}?"):
+                            flags = PACKAGE_MANAGERS.get(pm, [])
+                            if pm == "brew":
+                                launch_cmd = [pm, "uninstall"] + flags + [pkg]
+                            else:
+                                launch_cmd = ["sudo", pm, "remove"] + flags + [pkg]
+                            _suspend(stdscr)
+                            proc = subprocess.run(launch_cmd)
+                            _resume(stdscr)
+                            if proc.returncode == 0:
+                                curses_box_message(stdscr, f"{pkg} uninstalled.")
+                                installed = get_installed_packages(pm)
+                            else:
+                                curses_box_message(stdscr, f"Failed to uninstall {pkg}.")
+                    elif action == "Update":
+                        if not has_internet():
+                            curses_message(stdscr, "Error: No internet connection.")
+                        else:
+                            if pm == "brew":
+                                launch_cmd = [pm, "upgrade", pkg]
+                            else:
+                                launch_cmd = ["sudo", pm, "upgrade"] + [pkg]
+                            _suspend(stdscr)
+                            proc = subprocess.run(launch_cmd)
+                            _resume(stdscr)
+                            if proc.returncode == 0:
+                                curses_box_message(stdscr, f"{pkg} updated.")
+                            else:
+                                curses_box_message(stdscr, f"Failed to update {pkg}.")
+
         
 # ─── Menus ────────────────────────────────────────────────────────────────────
 def logs_menu(stdscr):
