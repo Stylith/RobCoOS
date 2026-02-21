@@ -257,7 +257,7 @@ def curses_pager(stdscr, text, title=""):
                 stdscr.addstr(5 + i, 2, line[:w - 4], curses.color_pair(COLOR_NORMAL))
             except curses.error:
                 pass
-        nav = "up/down scroll  q/tab=back"
+        nav = "up/down scroll  q/tab=back  Press enter to continue"
         try:
             stdscr.addstr(h - 2, 2, nav, curses.color_pair(COLOR_DIM))
         except curses.error:
@@ -271,6 +271,30 @@ def curses_pager(stdscr, text, title=""):
             offset += 1
         elif key in (ord('q'), ord('Q'), 27, 9, curses.KEY_ENTER, 10, 13):
             break
+
+def curses_box_message(stdscr, message, delay=2):
+    h, w = stdscr.getmaxyx()
+    box_w = len(message) + 6
+    box_h = 5
+    x = (w - box_w) // 2
+    y = (h - box_h) // 2
+    for row in range(box_h):
+        for col in range(box_w):
+            try:
+                if row == 0 or row == box_h - 1:
+                    stdscr.addch(y + row, x + col, '=', curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
+                elif col == 0 or col == box_w - 1:
+                    stdscr.addch(y + row, x + col, '|', curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
+                else:
+                    stdscr.addch(y + row, x + col, ' ', curses.color_pair(COLOR_SELECTED))
+            except curses.error:
+                pass
+    try:
+        stdscr.addstr(y + 2, x + 3, message, curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
+    except curses.error:
+        pass
+    stdscr.refresh()
+    time.sleep(delay)
 
 # ─── Data helpers ─────────────────────────────────────────────────────────────
 APPS_FILE     = Path("apps.json")
@@ -469,6 +493,47 @@ def search_packages(pm, query):
     except Exception:
         return []
 
+def get_package_info(pm, pkg):
+    try:
+        if pm == "brew":
+            result = subprocess.run(["brew", "info", pkg],
+                                    capture_output=True, text=True, timeout=10)
+            # First line is usually "name: description"
+            lines = result.stdout.strip().split("\n")
+            return lines[1].strip() if len(lines) > 1 else "No description available."
+
+        elif pm in ("apt", "apt-get"):
+            result = subprocess.run(["apt", "show", pkg],
+                                    capture_output=True, text=True, timeout=10)
+            for line in result.stdout.split("\n"):
+                if line.startswith("Description:"):
+                    return line.replace("Description:", "").strip()
+
+        elif pm == "dnf":
+            result = subprocess.run(["dnf", "info", pkg],
+                                    capture_output=True, text=True, timeout=10)
+            for line in result.stdout.split("\n"):
+                if line.startswith("Summary"):
+                    return line.split(":", 1)[-1].strip()
+
+        elif pm == "pacman":
+            result = subprocess.run(["pacman", "-Si", pkg],
+                                    capture_output=True, text=True, timeout=10)
+            for line in result.stdout.split("\n"):
+                if line.startswith("Description"):
+                    return line.split(":", 1)[-1].strip()
+
+        elif pm == "zypper":
+            result = subprocess.run(["zypper", "info", pkg],
+                                    capture_output=True, text=True, timeout=10)
+            for line in result.stdout.split("\n"):
+                if line.startswith("Summary"):
+                    return line.split(":", 1)[-1].strip()
+
+        return "No description available."
+    except Exception:
+        return "Could not fetch description."
+
 def appstore_menu(stdscr):
     pm = detect_package_manager()
     MAX_PER_PAGE = 20
@@ -524,13 +589,21 @@ def appstore_menu(stdscr):
                     elif pm is None:
                         curses_message(stdscr, "Error: No supported package manager found.")
                     else:
+                        info = get_package_info(pm, pkg)
+                        curses_pager(stdscr, f"{pkg}\n\n{info}", title="Package Info")
                         if curses_confirm(stdscr, f"Install {pkg}?"):
                             flags = PACKAGE_MANAGERS.get(pm, [])
                             if pm == "brew":
                                 launch_cmd = [pm, "install"] + flags + [pkg]
                             else:
                                 launch_cmd = ["sudo", pm, "install"] + flags + [pkg]
-                            launch_subprocess(stdscr, launch_cmd)
+                            _suspend(stdscr)
+                            proc = subprocess.run(launch_cmd)
+                            _resume(stdscr)
+                            if proc.returncode == 0:
+                                curses_box_message(stdscr, f"{pkg} installed successfully!")
+                            else:
+                                curses_box_message(stdscr, f"Failed to install {pkg}.")
         
 # ─── Menus ────────────────────────────────────────────────────────────────────
 def logs_menu(stdscr):
