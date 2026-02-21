@@ -1,668 +1,635 @@
-import os 
+import os
 import sys
 import time
 import subprocess
 import json
 import shlex
-from pathlib import Path 
-from datetime import date
-from bullet import Bullet, Check, YesNo, Input
-from playsound import playsound
+import curses
+import threading
+from pathlib import Path
+from datetime import date, datetime
 
-os.system('clear')
+# Try playsound - make it optional
+try:
+    from playsound import playsound
+    SOUND_ENABLED = True
+except ImportError:
+    SOUND_ENABLED = False
+    def playsound(*args, **kwargs):
+        pass
 
 base_dir = Path(__file__).resolve().parent
-if not base_dir.is_dir():
-    print("Error," + {base_dir} + "does not exist")
-else:
+if base_dir.is_dir():
     os.chdir(base_dir)
 
-#center all text
-def Middle(text):
-    return text.center(os.get_terminal_size().columns)
+# ─── Colors ───────────────────────────────────────────────────────────────────
+COLOR_NORMAL   = 1
+COLOR_SELECTED = 2
+COLOR_TITLE    = 3
+COLOR_STATUS   = 4
+COLOR_DIM      = 5
 
-class Format:
-    end = '\033[0m'
-    underline = '\033[4m'
+def init_colors():
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(COLOR_NORMAL,   curses.COLOR_GREEN,  -1)
+    curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK,  curses.COLOR_GREEN)
+    curses.init_pair(COLOR_TITLE,    curses.COLOR_GREEN,  -1)
+    curses.init_pair(COLOR_STATUS,   curses.COLOR_BLACK,  curses.COLOR_GREEN)
+    curses.init_pair(COLOR_DIM,      curses.COLOR_GREEN,  -1)
 
-# Journal menu
-def journal_new():
-        clear()
-        current_date = date.today()
-        x = Path("journal_entries")
-        if not os.path.exists(x):
-            os.makedirs("journal_entries")
-        else:
-            cli = Input(
-                prompt = Format.underline + str(current_date) + Format.end + "\n",
-            )
-            result = cli.launch()
-            file_name = "journal_entries/" + str(current_date) +".txt"
-            with open(file_name, "a") as f:
-                f.write(result)
-    
-def journal_view():
-    clear()
-    directory_path = Path("journal_entries")
-    logs = [f for f in directory_path.iterdir() if f.is_file()]
-    if not logs:
-        print("Error, log folder empty")
-        time.sleep(2)
-        logsmenu()
-    else:
-        file_map = {f.stem: f for f in logs}
-    options = list(file_map.keys()) + ["Back"]
+# ─── Drawing helpers ──────────────────────────────────────────────────────────
+HEADER_LINES = [
+    "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM",
+    "COPYRIGHT 2075-2077 ROBCO INDUSTRIES",
+    "-SERVER 1-",
+]
+
+def draw_header(win):
+    h, w = win.getmaxyx()
+    for i, line in enumerate(HEADER_LINES):
+        x = max(0, (w - len(line)) // 2)
+        try:
+            win.addstr(i, x, line, curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+def draw_status(win):
+    h, w = win.getmaxyx()
+    now = datetime.now().strftime("%H:%M:%S")
+    status = f" ROBCO SYSTEM ACTIVE | {now} "
+    status = status.ljust(w)[:w-1]
+    try:
+        win.addstr(h-1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+def draw_separator(win, row, w):
+    sep = "=" * min(50, w - 4)
+    x = max(0, (w - len(sep)) // 2)
+    try:
+        win.addstr(row, x, sep, curses.color_pair(COLOR_DIM))
+    except curses.error:
+        pass
+
+def draw_menu_title(win, title, row):
+    h, w = win.getmaxyx()
+    x = max(0, (w - len(title)) // 2)
+    try:
+        win.addstr(row, x, title, curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+# ─── Generic curses menu ──────────────────────────────────────────────────────
+def run_menu(stdscr, title, choices):
+    """
+    Display a menu and return the selected string.
+    Filters out "---" from navigation (shown but not selectable).
+    Returns the chosen string.
+    """
+    selectable = [c for c in choices if c != "---"]
+    idx = 0  # index into selectable list
+
     while True:
-        cli = Bullet(
-            prompt = "\nSelect Log",
-            choices = options,
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result == "Back":
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        draw_header(stdscr)
+        draw_separator(stdscr, 4, w)
+        draw_menu_title(stdscr, title, 5)
+        draw_separator(stdscr, 6, w)
+
+        # Build display list (choices including "---")
+        start_row = 8
+        sel_display_idx = choices.index(selectable[idx]) if selectable else 0
+
+        for di, choice in enumerate(choices):
+            row = start_row + di
+            if row >= h - 2:
+                break
+            is_sep = choice == "---"
+            is_selected = (choice == selectable[idx]) if not is_sep else False
+            prefix = "  > " if is_selected else "    "
+            text = prefix + choice
+            attr = curses.color_pair(COLOR_DIM) if is_sep else (
+                curses.color_pair(COLOR_SELECTED) | curses.A_BOLD if is_selected
+                else curses.color_pair(COLOR_NORMAL)
+            )
+            try:
+                stdscr.addstr(row, 2, text[:w-4], attr)
+            except curses.error:
+                pass
+
+        draw_status(stdscr)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord('k')):
+            idx = (idx - 1) % len(selectable) if selectable else 0
+        elif key in (curses.KEY_DOWN, ord('j')):
+            idx = (idx + 1) % len(selectable) if selectable else 0
+        elif key in (curses.KEY_ENTER, 10, 13):
+            playsound('Sounds/ui_hacking_charenter_01.wav', False)
+            return selectable[idx] if selectable else None
+        elif key in (ord('q'), ord('Q'), 27):  # ESC / q = back
+            return "Back"
+
+def curses_input(stdscr, prompt):
+    global status_paused
+    status_paused = True
+    """Simple single-line input at the bottom of the screen."""
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+    draw_header(stdscr)
+    try:
+        stdscr.addstr(5, 2, prompt, curses.color_pair(COLOR_TITLE) | curses.A_UNDERLINE)
+        stdscr.addstr(7, 2, "> ", curses.color_pair(COLOR_NORMAL))
+    except curses.error:
+        pass
+    curses.echo()
+    curses.curs_set(1)
+    stdscr.refresh()
+    try:
+        inp = stdscr.getstr(7, 4, w - 6).decode("utf-8")
+    except Exception:
+        inp = ""
+    curses.noecho()
+    curses.curs_set(0)
+    status_paused = False
+    return inp.strip()
+
+def curses_confirm(stdscr, message):
+    global status_paused
+    status_paused = True
+    """Returns True if user confirms with 'y'."""
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+    draw_header(stdscr)
+    try:
+        stdscr.addstr(5, 2, message + " (y/n): ", curses.color_pair(COLOR_NORMAL))
+    except curses.error:
+        pass
+    curses.echo()
+    curses.curs_set(1)
+    stdscr.refresh()
+    try:
+        ans = stdscr.getstr(5, 2 + len(message) + 9, 3).decode("utf-8").strip().lower()
+    except Exception:
+        ans = ""
+    curses.noecho()
+    curses.curs_set(0)
+    status_paused = False
+    return ans == "y"
+
+def curses_message(stdscr, message, delay=1.5):
+    """Show a message briefly."""
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+    draw_header(stdscr)
+    try:
+        stdscr.addstr(6, 2, message, curses.color_pair(COLOR_NORMAL))
+    except curses.error:
+        pass
+    draw_status(stdscr)
+    stdscr.refresh()
+    time.sleep(delay)
+
+def curses_pager(stdscr, text, title=""):
+    """Simple pager for viewing text."""
+    lines = text.split("\n")
+    offset = 0
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        draw_header(stdscr)
+        if title:
+            draw_menu_title(stdscr, title, 4)
+        max_lines = h - 8
+        for i, line in enumerate(lines[offset:offset+max_lines]):
+            try:
+                stdscr.addstr(5 + i, 2, line[:w-4], curses.color_pair(COLOR_NORMAL))
+            except curses.error:
+                pass
+        nav = "↑↓ scroll  q=quit"
+        try:
+            stdscr.addstr(h-2, 2, nav, curses.color_pair(COLOR_DIM))
+        except curses.error:
+            pass
+        draw_status(stdscr)
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord('k')) and offset > 0:
+            offset -= 1
+        elif key in (curses.KEY_DOWN, ord('j')) and offset < max(0, len(lines) - max_lines):
+            offset += 1
+        elif key in (ord('q'), ord('Q'), 27, curses.KEY_ENTER, 10, 13):
             break
-        newpath = file_map[result]
-        clear()
-        subprocess.run(['vim', str(newpath)])
 
-def journal_delete():
-    clear()
-    directory_path = Path("journal_entries")
-    logs = [f for f in directory_path.iterdir() if f.is_file()]
-    if not logs:
-        print("Error, log folder empty")
-        time.sleep(2)
-        logsmenu()
-    else:
-        file_map = {f.stem: f for f in logs}
-    options = list(file_map.keys()) + ["Back"]
-    cli = Bullet(
-        prompt = "\nSelect Log",
-        choices = options,
-        bullet = "> "
-    )
-    result = cli.launch()
-    if result == "Back":
-        logsmenu()
-    newpath = file_map[result]
-    clear()
-    subprocess.run(['rm', str(newpath)])
-
-#Apps menu script
-APPS_FILE = Path("apps.json")
-def load_apps():
-    if APPS_FILE.exists():
-        return json.loads(APPS_FILE.read_text())
-    return {}
-
-def save_apps(apps):
-    APPS_FILE.write_text(json.dumps(apps, indent=4))
-
-def add_app(apps):
-    name = input("Enter app display name: ").strip()
-    command = input("Enter launch command: ").strip()
-
-    if not name or not command:
-        print("Error: Invalid Input")
-        time.sleep(1)
-        return
-
-    apps[name] = shlex.split(command)
-    save_apps(apps)
-    print(f"{name} added.")
-
-def delete_app(apps):
-    if not apps:
-        print("Error: App List Empty")
-        time.sleep(2)
-        return
-
-    cli = Bullet(
-        prompt = "\nSelect App to Delete",
-        choices = list(apps.keys())
-    )
-
-    result = cli.launch()
-    confirm = input(f"Delete '{result}'? (y/n): ").lower()
-    if confirm == "y":
-        del apps[result]
-        save_apps(apps)
-        print(f"{result} deleted.")
-        time.sleep(1)
-    else:
-        print("Cancelled.")
-        time.sleep(1)
-
-#Games menu script
-GAMES_FILE = Path("games.json")
-def load_games():
-    if GAMES_FILE.exists():
-        return json.loads(GAMES_FILE.read_text())
-    return {}
-
-def save_games(games):
-    GAMES_FILE.write_text(json.dumps(games, indent=4))
-
-def add_game(games):
-    name = input("Enter game display name: ").strip()
-    command = input("Enter launch command: ").strip()
-
-    if not name or not command:
-        print("Error: Invalid Input")
-        time.sleep(1)
-        return
-
-    games[name] = shlex.split(command)
-    save_games(games)
-    print(f"{name} added.")
-
-def delete_game(games):
-    if not games:
-        print("Error: Games List Empty")
-        time.sleep(2)
-        return
-
-    cli = Bullet(
-        prompt = "\nSelect Game to Delete",
-        choices = list(games.keys())
-    )
-
-    result = cli.launch()
-    confirm = input(f"Delete '{result}'? (y/n): ").lower()
-    if confirm == "y":
-        del games[result]
-        save_games(games)
-        print(f"{result} deleted.")
-        time.sleep(1)
-    else:
-        print("Cancelled.")
-        time.sleep(1)
-
-#Documents menu script
-DOCS_FILE = Path("documents.json")
+# ─── Data helpers ─────────────────────────────────────────────────────────────
+APPS_FILE    = Path("apps.json")
+GAMES_FILE   = Path("games.json")
+DOCS_FILE    = Path("documents.json")
+NETWORKS_FILE= Path("networks.json")
 ALLOWED_EXTENSIONS = {".pdf", ".epub", ".txt", ".mobi", ".azw3"}
-def load_categories():
-    if DOCS_FILE.exists():
-        return json.loads(DOCS_FILE.read_text())
+
+def load_json(path):
+    if path.exists():
+        return json.loads(path.read_text())
     return {}
 
-def save_categories(categories):
-    DOCS_FILE.write_text(json.dumps(categories, indent=4))
+def save_json(path, data):
+    path.write_text(json.dumps(data, indent=4))
 
-def add_category(categories):
-    name = input("Enter category name: ").strip()
-    path_input = input("Enter folder path: ").strip()
-    path = Path(path_input).expanduser()
-    if not path.exists() or not path.is_dir():
-        print("Error: Invalid Directory")
-        input("Press Enter to Continue")
-        return
-    categories [name] = str(path)
-    save_categories(categories)
-    print("Category Added")
-    time.sleep(1)
-
-def delete_category(categories):
-    if not categories:
-        print("Error: No Categories to Delete")
-        input("Press Enter to Continue")
-        return
-    cli = Bullet(
-        prompt = "\nSelect Category to Delete",
-        choices = list(categories.keys())
-    )
-    result = cli.launch()
-    confirm = input(f"Delete '{result}'? (y/n): ").lower()
-    if confirm == "y":
-        del categories[result]
-        save_categories(categories)
-        print ("Deleted.")
-    input("Press Enter to Continue")
+def load_apps():    return load_json(APPS_FILE)
+def save_apps(d):   save_json(APPS_FILE, d)
+def load_games():   return load_json(GAMES_FILE)
+def save_games(d):  save_json(GAMES_FILE, d)
+def load_networks():  return load_json(NETWORKS_FILE)
+def save_networks(d): save_json(NETWORKS_FILE, d)
+def load_categories():  return load_json(DOCS_FILE)
+def save_categories(d): save_json(DOCS_FILE, d)
 
 def scan_documents(folder: Path):
-    return [
-        f for f in folder.iterdir()
-        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS
-    ]
+    return [f for f in folder.iterdir()
+            if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS]
 
-def open_file(file_path: Path):
-    subprocess.run(["epy", str(file_path)])
+# ─── Subprocess launcher (leaves curses, runs app, returns) ──────────────────
+def _suspend(stdscr):
+    global status_paused
+    status_paused = True        # stop status thread from touching screen
+    time.sleep(1.1)             # let any in-flight status write finish
+    curses.endwin()             # restore terminal — let subprocess set its own mode
+    os.system('tput reset')     # full terminal reset: restores size, capabilities, clears screen
 
-#Network menu script
-NETWORKS_FILE = Path("networks.json")
-def load_networks():
-    if NETWORKS_FILE.exists():
-        return json.loads(NETWORKS_FILE.read_text())
-    return {}
-
-def save_networks(networks):
-    NETWORKS_FILE.write_text(json.dumps(networks, indent=4))
-
-def add_network(networks):
-    name = input("Enter Network Program display name: ").strip()
-    command = input("Enter launch command: ").strip()
-
-    if not name or not command:
-        print("Error: Invalid Input")
-        time.sleep(1)
-        return
-
-    networks[name] = shlex.split(command)
-    save_networks(networks)
-    print(f"{name} added.")
-
-def delete_network(networks):
-    if not networks:
-        print("Error: Network Program List Empty")
-        time.sleep(2)
-        return
-
-    cli = Bullet(
-        prompt = "\nSelect Network Program to Delete",
-        choices = list(networks.keys())
-    )
-
-    result = cli.launch()
-    confirm = input(f"Delete '{result}'? (y/n): ").lower()
-    if confirm == "y":
-        del networks[result]
-        save_networks(networks)
-        print(f"{result} deleted.")
-        time.sleep(1)
-    else:
-        print("Cancelled.")
-
-#Robco text on top
-startup1 = "ROBCO INDUSTRIES UNIFIED OPERATING SYSTEM"
-startup2 = "COPYRIGHT 2075-2077 ROBCO INDUSTRIES"
-startup3 = "-SERVER 1-"
-
-def maintitle():
-    for i in Middle(startup1):
-        print(i, end="", flush=True)
-        time.sleep(0.01)
-    for i in Middle(startup2):
-        print(i, end="", flush=True)
-        time.sleep(0.01)
-    for i in Middle(startup3):
-        print(i, end="", flush=True)
-        time.sleep(0.01)
-    print("")
-    playsound('Sounds/ui_hacking_passgood.wav')
-    time.sleep(1)
-
-def title():
-    print(Middle(startup1))
-    print(Middle(startup2))
-    print(Middle(startup3))
-    
-#Bootup Animation
-def bootup():
-    intro = "WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE"
-    intro3 = "RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT"
-    intro4 = "ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode"
-    for i in intro:
-        playsound('Sounds/ui_hacking_charscroll.wav', False)
-        print(i, end="", flush=True)
-        time.sleep(0.02)
-    time.sleep(2)
-    clear()
-    for i in intro3:
-        playsound('Sounds/ui_hacking_charscroll.wav', False)
-        print(i, end="", flush=True)
-        time.sleep(0.05)
-    time.sleep(2)
-    clear()
-    for i in intro4:
-        playsound('Sounds/ui_hacking_charscroll.wav', False)
-        print(i, end="", flush=True)
-        time.sleep(0.02)
-    time.sleep(2)
-    clear()
-    for i in "LOGON ADMIN":
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        print(i, end="", flush=True)
-        time.sleep(0.1)
-    time.sleep(3)
-    clear()
-    maintitle() 
-    
-#Main menu
-def clear():
+def _resume(stdscr):
+    global status_paused
     os.system('clear')
+    curses.reset_prog_mode()
+    curses.noecho()
+    curses.cbreak()
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    init_colors()
+    stdscr.clearok(True)        # force full redraw ignoring what curses thinks is on screen
+    stdscr.clear()
+    stdscr.refresh()
+    status_paused = False       # re-enable status thread
 
-def mainmenu():
-    while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Main Menu"))
-        print(Middle("=================================================="))
-        print("")
-        cli = Bullet(
-            prompt = Format.underline + "Select Program" + Format.end + "\n",
-            choices = ["Applications", "Documents", "Network", "Games", "---", "Settings", "Logout"], 
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result == "Logout":
-            print("Logging out...")
-            playsound('Sounds/ui_hacking_passbad.wav', False)
-            time.sleep(1)
-            os.system('clear')
-            break
-        elif result in ("---", ""):
-            continue
-        elif result == "Applications":
-            appsmenu()
-        elif result == "Documents":
-            documentsmenu()
-        elif result == "Games":
-            gamesmenu()
-        elif result == "Network":
-            networkmenu()
-        elif result == "Settings":
-            settingsmenu()
+def launch_subprocess(stdscr, cmd):
+    _suspend(stdscr)
+    subprocess.run(cmd)
+    _resume(stdscr)
 
+def launch_vim(stdscr, path):
+    _suspend(stdscr)
+    subprocess.run(['vim', str(path)])
+    _resume(stdscr)
 
-def appsmenu():
-    while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Applications Menu"))
-        print(Middle("=================================================="))
-        print("")
-        apps = load_apps()
-        choices = list(apps.keys()) + ["---", "Back"]
-        cli = Bullet(
-            prompt = Format.underline + "Select Application" + Format.end + "\n",
-            choices = choices,
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result in ("---", ""):
-            continue
-        elif result == "Back":
-            break
-        else:
-            playsound('Sounds/ui_hacking_charenter_01.wav')
-            clear()
-            subprocess.run(apps[result])
-            
-   
-def documentsmenu():
-    while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Documents Menu"))
-        print(Middle("=================================================="))
-        print("")
-        categories = load_categories()
-        choices = ["Logs"] + list(categories.keys()) + ["---", "Back"]
-        cli = Bullet(
-            prompt = Format.underline + "Select Doc Type" + Format.end + "\n",
-            choices = choices, 
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result == "---":
-            continue
-        elif result == "Logs":
-            logsmenu()
-        elif result == "Back":
-            break
-        else:
-            while True:
-                playsound('Sounds/ui_hacking_charenter_01.wav')
-                clear()
-                title()
-                print("")
-                print(Middle("Games Menu"))
-                print(Middle("=================================================="))
-                print("")
-                folder = Path(categories[result]).expanduser()
-                files = scan_documents(folder)
-                if not files:
-                    print("No Supported Documents Found")
-                    input("Press Enter to Continue")
-                    break
-                files.sort(key=lambda f: f.stem.lower())
-                file_map = {}
-                for f in files:
-                    display = f.stem.replace("_", " ")
-                    file_map[display] = f
-                file_cli = Bullet(
-                    prompt = Format.underline + f"\n{result}" + Format.end + "\n",
-                    choices = list(file_map.keys()) + ["---", "Back"],
-                    bullet = "> "
-                )
-                file_result = file_cli.launch()
-                if file_result == "Back":
-                    break
-                if file_result in ("---", ""):
-                    continue
-                else:
-                    playsound('Sounds/ui_hacking_charenter_01.wav')
-                    open_file(file_map[file_result])
+def launch_epy(stdscr, path):
+    _suspend(stdscr)
+    subprocess.run(['epy', str(path)])
+    _resume(stdscr)
 
-def gamesmenu():
-    while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Games Menu"))
-        print(Middle("=================================================="))
-        print("")
-        games = load_games()
-        choices = list(games.keys()) + ["---", "Back"]
-        cli = Bullet(
-            prompt = Format.underline + "Select Game" + Format.end + "\n",
-            choices = choices,
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result in ("---", ""):
-            continue
-        elif result == "Back":
-            break
-        else:
-            playsound('Sounds/ui_hacking_charenter_01.wav')
-            clear()
-            subprocess.run(games[result])
+# ─── Journal ──────────────────────────────────────────────────────────────────
+def journal_new(stdscr):
+    global status_paused
+    current_date = date.today()
+    x = Path("journal_entries")
+    x.mkdir(exist_ok=True)
+    status_paused = True
+    text = curses_input(stdscr, f"New Entry — {current_date}")
+    status_paused = False
+    if text:
+        file_name = x / f"{current_date}.txt"
+        with open(file_name, "a") as f:
+            f.write(text + "\n")
+        curses_message(stdscr, "Entry saved.")
 
-def networkmenu():
+def journal_view(stdscr):
+    directory_path = Path("journal_entries")
+    if not directory_path.exists():
+        curses_message(stdscr, "Error: journal_entries folder not found.")
+        return
+    logs = [f for f in directory_path.iterdir() if f.is_file()]
+    if not logs:
+        curses_message(stdscr, "Error: Log folder empty.")
+        return
+    file_map = {f.stem: f for f in logs}
+    options = sorted(file_map.keys()) + ["Back"]
     while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Network Menu"))
-        print(Middle("=================================================="))
-        print("")
-        networks = load_networks()
-        choices = list(networks.keys()) + ["---", "Back"]
-        cli = Bullet(
-            prompt = Format.underline + "Select Network Program" + Format.end + "\n",
-            choices = choices,
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result in ("---", ""):
-            continue
-        elif result == "Back":
-            break
-        else:
-            playsound('Sounds/ui_hacking_charenter_01.wav')
-            clear()
-            subprocess.run(networks[result])
-
-def logsmenu():
-    while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Logs Menu"))
-        print(Middle("=================================================="))
-        print("")
-        cli = Bullet(
-            prompt = Format.underline + "Choose Action" + Format.end + "\n",
-            choices = ["Create New Log", "View Logs", "Delete Logs", "Back"], 
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result == "Create New Log":
-            journal_new()
-        if result == "View Logs":
-            journal_view()
-        if result == "Delete Logs":
-            journal_delete()
+        result = run_menu(stdscr, "View Logs", options)
         if result == "Back":
             break
+        if result in file_map:
+            launch_vim(stdscr, file_map[result])
 
-def settingsmenu():
+def journal_delete(stdscr):
+    directory_path = Path("journal_entries")
+    if not directory_path.exists():
+        curses_message(stdscr, "Error: journal_entries folder not found.")
+        return
+    logs = [f for f in directory_path.iterdir() if f.is_file()]
+    if not logs:
+        curses_message(stdscr, "Error: Log folder empty.")
+        return
+    file_map = {f.stem: f for f in logs}
+    options = sorted(file_map.keys()) + ["Back"]
+    result = run_menu(stdscr, "Delete Log", options)
+    if result == "Back" or result not in file_map:
+        return
+    if curses_confirm(stdscr, f"Delete '{result}'?"):
+        subprocess.run(['rm', str(file_map[result])])
+        curses_message(stdscr, f"Deleted {result}.")
+
+# ─── Generic add/delete for apps/games/networks ──────────────────────────────
+def add_entry(stdscr, data, save_fn, kind="App"):
+    name = curses_input(stdscr, f"Enter {kind} display name:")
+    if not name:
+        curses_message(stdscr, "Error: Invalid Input.")
+        return
+    command = curses_input(stdscr, f"Enter launch command for '{name}':")
+    if not command:
+        curses_message(stdscr, "Error: Invalid Input.")
+        return
+    data[name] = shlex.split(command)
+    save_fn(data)
+    curses_message(stdscr, f"{name} added.")
+
+def delete_entry(stdscr, data, save_fn, kind="App"):
+    if not data:
+        curses_message(stdscr, f"Error: {kind} list is empty.")
+        return
+    options = list(data.keys()) + ["Back"]
+    result = run_menu(stdscr, f"Delete {kind}", options)
+    if result == "Back" or result not in data:
+        return
+    if curses_confirm(stdscr, f"Delete '{result}'?"):
+        del data[result]
+        save_fn(data)
+        curses_message(stdscr, f"{result} deleted.")
+    else:
+        curses_message(stdscr, "Cancelled.", 0.8)
+
+# ─── Documents ───────────────────────────────────────────────────────────────
+def add_category(stdscr, categories):
+    name = curses_input(stdscr, "Enter category name:")
+    if not name:
+        curses_message(stdscr, "Error: Invalid Input.")
+        return
+    path_input = curses_input(stdscr, "Enter folder path:")
+    path = Path(path_input).expanduser()
+    if not path.exists() or not path.is_dir():
+        curses_message(stdscr, "Error: Invalid Directory.")
+        return
+    categories[name] = str(path)
+    save_categories(categories)
+    curses_message(stdscr, "Category Added.")
+
+def delete_category(stdscr, categories):
+    if not categories:
+        curses_message(stdscr, "Error: No categories to delete.")
+        return
+    options = list(categories.keys()) + ["Back"]
+    result = run_menu(stdscr, "Delete Category", options)
+    if result == "Back" or result not in categories:
+        return
+    if curses_confirm(stdscr, f"Delete '{result}'?"):
+        del categories[result]
+        save_categories(categories)
+        curses_message(stdscr, "Deleted.")
+    else:
+        curses_message(stdscr, "Cancelled.", 0.8)
+
+# ─── Menus ────────────────────────────────────────────────────────────────────
+def logs_menu(stdscr):
     while True:
-        playsound('Sounds/ui_hacking_charenter_01.wav')
-        clear()
-        title()
-        print("")
-        print(Middle("Settings Menu"))
-        print(Middle("=================================================="))
-        print("")
-        cli = Bullet(
-            prompt = Format.underline + "Configurations" + Format.end + "\n",
-            choices = ["Edit Menus", "---", "Back"], 
-            bullet = "> "
-        )
-        result = cli.launch()
-        if result in ("---", ""):
-            continue
-        elif result == "Back":
+        result = run_menu(stdscr, "Logs Menu", ["Create New Log", "View Logs", "Delete Logs", "Back"])
+        if result == "Back":
+            break
+        elif result == "Create New Log":
+            journal_new(stdscr)
+        elif result == "View Logs":
+            journal_view(stdscr)
+        elif result == "Delete Logs":
+            journal_delete(stdscr)
+
+def apps_menu(stdscr):
+    while True:
+        apps = load_apps()
+        choices = list(apps.keys()) + ["---", "Back"]
+        result = run_menu(stdscr, "Applications Menu", choices)
+        if result == "Back":
+            break
+        elif result in apps:
+            launch_subprocess(stdscr, apps[result])
+
+def games_menu(stdscr):
+    while True:
+        games = load_games()
+        choices = list(games.keys()) + ["---", "Back"]
+        result = run_menu(stdscr, "Games Menu", choices)
+        if result == "Back":
+            break
+        elif result in games:
+            launch_subprocess(stdscr, games[result])
+
+def network_menu(stdscr):
+    while True:
+        networks = load_networks()
+        choices = list(networks.keys()) + ["---", "Back"]
+        result = run_menu(stdscr, "Network Menu", choices)
+        if result == "Back":
+            break
+        elif result in networks:
+            launch_subprocess(stdscr, networks[result])
+
+def documents_menu(stdscr):
+    while True:
+        categories = load_categories()
+        choices = ["Logs"] + list(categories.keys()) + ["---", "Back"]
+        result = run_menu(stdscr, "Documents Menu", choices)
+        if result == "Back":
+            break
+        elif result == "Logs":
+            logs_menu(stdscr)
+        elif result in categories:
+            folder = Path(categories[result]).expanduser()
+            while True:
+                files = scan_documents(folder)
+                if not files:
+                    curses_message(stdscr, "No supported documents found.")
+                    break
+                files.sort(key=lambda f: f.stem.lower())
+                file_map = {f.stem.replace("_", " "): f for f in files}
+                file_result = run_menu(stdscr, result, list(file_map.keys()) + ["Back"])
+                if file_result == "Back":
+                    break
+                if file_result in file_map:
+                    launch_epy(stdscr, file_map[file_result])
+
+def edit_apps_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Edit Applications", ["Add App", "Delete App", "---", "Back"])
+        if result == "Back":
+            break
+        elif result == "Add App":
+            apps = load_apps()
+            add_entry(stdscr, apps, save_apps, "App")
+        elif result == "Delete App":
+            apps = load_apps()
+            delete_entry(stdscr, apps, save_apps, "App")
+
+def edit_games_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Edit Games", ["Add Game", "Delete Game", "---", "Back"])
+        if result == "Back":
+            break
+        elif result == "Add Game":
+            games = load_games()
+            add_entry(stdscr, games, save_games, "Game")
+        elif result == "Delete Game":
+            games = load_games()
+            delete_entry(stdscr, games, save_games, "Game")
+
+def edit_network_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Edit Network", ["Add Network", "Delete Network", "---", "Back"])
+        if result == "Back":
+            break
+        elif result == "Add Network":
+            networks = load_networks()
+            add_entry(stdscr, networks, save_networks, "Network Program")
+        elif result == "Delete Network":
+            networks = load_networks()
+            delete_entry(stdscr, networks, save_networks, "Network Program")
+
+def edit_documents_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Edit Documents", ["Add Category", "Delete Category", "---", "Back"])
+        if result == "Back":
+            break
+        elif result == "Add Category":
+            categories = load_categories()
+            add_category(stdscr, categories)
+        elif result == "Delete Category":
+            categories = load_categories()
+            delete_category(stdscr, categories)
+
+def edit_menus_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Edit Menus",
+                          ["Edit Applications", "Edit Documents", "Edit Network", "Edit Games", "---", "Back"])
+        if result == "Back":
+            break
+        elif result == "Edit Applications":
+            edit_apps_menu(stdscr)
+        elif result == "Edit Documents":
+            edit_documents_menu(stdscr)
+        elif result == "Edit Network":
+            edit_network_menu(stdscr)
+        elif result == "Edit Games":
+            edit_games_menu(stdscr)
+
+def settings_menu(stdscr):
+    while True:
+        result = run_menu(stdscr, "Settings Menu", ["Edit Menus", "---", "Back"])
+        if result == "Back":
             break
         elif result == "Edit Menus":
-            while True:
-                playsound('Sounds/ui_hacking_charenter_01.wav')
-                clear()
-                title()
-                print("")
-                print(Middle("Edit Menus"))
-                print(Middle("=================================================="))
-                print("")
-                menu_cli = Bullet(
-                    prompt = Format.underline + "Edit Menu" + Format.end + "\n",
-                    choices = ["Edit Applications", "Edit Documents", "Edit Network", "Edit Games", "---", "Back"],
-                    bullet = "> "
-                )
-                menu_result = menu_cli.launch()
-                if menu_result in ("---", ""):
-                    continue
-                elif menu_result == "Back":
-                    break
-                elif menu_result == "Edit Applications":
-                    while True:
-                        playsound('Sounds/ui_hacking_charenter_01.wav')
-                        clear()
-                        title()
-                        print("")
-                        print(Middle("Edit Applications Menu"))
-                        print(Middle("=================================================="))
-                        print("")
-                        apps = load_apps()
-                        app_cli = Bullet(
-                        prompt = Format.underline + "Edit Applications" + Format.end + "\n",
-                        choices = ["Add App", "Delete App", "---", "Back"],
-                        bullet = "> "
-                        )
-                        app_result = app_cli.launch()
-                        if app_result in ("---", ""):
-                            continue
-                        elif app_result == "Back":
-                            break
-                        elif app_result == "Add App":
-                            add_app(apps)
-                        elif app_result == "Delete App":
-                            delete_app(apps)
-                elif menu_result == "Edit Games":
-                    while True:
-                        playsound('Sounds/ui_hacking_charenter_01.wav')
-                        clear()
-                        title()
-                        print("")
-                        print(Middle("Edit Games Menu"))
-                        print(Middle("=================================================="))
-                        print("")
-                        games = load_games()
-                        game_cli = Bullet(
-                        prompt = Format.underline + "Edit Games" + Format.end + "\n",
-                        choices = ["Add Game", "Delete Game", "---", "Back"],
-                        bullet = "> "
-                        )
-                        game_result = game_cli.launch()
-                        if game_result in ("---", ""):
-                            continue
-                        elif game_result == "Back":
-                            break
-                        elif game_result == "Add Game":
-                            add_game(games)
-                        elif game_result == "Delete Game":
-                            delete_game(games)
-                elif menu_result == "Edit Network":
-                    while True:
-                        playsound('Sounds/ui_hacking_charenter_01.wav')
-                        clear()
-                        title()
-                        print("")
-                        print(Middle("Edit Network Menu"))
-                        print(Middle("=================================================="))
-                        print("")
-                        networks = load_networks()
-                        network_cli = Bullet(
-                        prompt = Format.underline + "Edit Network" + Format.end + "\n",
-                        choices = ["Add Network", "Delete Network", "---", "Back"],
-                        bullet = "> "
-                        )
-                        network_result = network_cli.launch()
-                        if network_result in ("---", ""):
-                            continue
-                        elif network_result == "Back":
-                            break
-                        elif network_result == "Add Network":
-                            add_network(networks)
-                        elif network_result == "Delete Network":
-                            delete_network(networks)
-                elif menu_result == "Edit Documents":
-                    while True:
-                        playsound('Sounds/ui_hacking_charenter_01.wav')
-                        clear()
-                        title()
-                        print("")
-                        print(Middle("Edit Documents Menu"))
-                        print(Middle("=================================================="))
-                        print("")
-                        categories = load_categories()
-                        category_cli = Bullet(
-                        prompt = Format.underline + "Edit Document Categories" + Format.end + "\n",
-                        choices = ["Add Category", "Delete Category", "---", "Back"],
-                        bullet = "> "
-                        )
-                        category_result = category_cli.launch()
-                        if category_result in ("---", ""):
-                            continue
-                        elif category_result == "Back":
-                            break
-                        elif category_result == "Add Category":
-                            add_category(categories)
-                        elif category_result == "Delete Category":
-                            delete_category(categories)
-                elif menu_result == "Back":
-                    break
+            edit_menus_menu(stdscr)
 
-#bootup()
+# ─── Status bar thread ────────────────────────────────────────────────────────
+status_running = True
+status_paused = False
+_stdscr_ref = None
+
+def status_bar_thread():
+    while status_running:
+        time.sleep(1)
+        if not status_running or status_paused:
+            continue
+        scr = _stdscr_ref
+        if scr is not None:
+            try:
+                draw_status(scr)
+                scr.refresh()
+            except Exception:
+                pass
+
+# ─── Boot animation (curses version) ─────────────────────────────────────────
+def bootup_curses(stdscr):
+    sequences = [
+        ("WELCOME TO ROBCO INDUSTRIES (TM) TERMLINK\nSET TERMINAL/INQUIRE", 0.02, 2),
+        ("RIT-V300\n>SET FILE/PROTECTION-OWNER/RFWD ACCOUNTS.F\n>SET HALT RESTART/MAINT", 0.05, 2),
+        ("ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL\nRETROS BIOS\nRBIOS-4.02.08.00 52EE5.E7.E8\nCopyright 2201-2203 Robco Ind.\nUppermem: 64KB\nRoot (5A8)\nMaintenance Mode", 0.02, 2),
+        ("LOGON ADMIN", 0.1, 3),
+    ]
+    for text, delay, pause in sequences:
+        stdscr.erase()
+        row, col = 0, 0
+        for ch in text:
+            if ch == '\n':
+                row += 1; col = 0
+            else:
+                try:
+                    stdscr.addch(row, col, ch, curses.color_pair(COLOR_NORMAL))
+                    col += 1
+                except curses.error:
+                    pass
+            stdscr.refresh()
+            time.sleep(delay)
+        time.sleep(pause)
+        stdscr.erase()
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+def main(stdscr):
+    global _stdscr_ref, status_running
+    _stdscr_ref = stdscr
+
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    init_colors()
+
+    # Uncomment to enable boot animation:
+    # bootup_curses(stdscr)
+
+    t = threading.Thread(target=status_bar_thread, daemon=True)
+    t.start()
+
+    while True:
+        result = run_menu(stdscr, "Main Menu",
+                          ["Applications", "Documents", "Network", "Games", "---", "Settings", "Logout"])
+        if result == "Logout":
+            playsound('Sounds/ui_hacking_passbad.wav', False)
+            curses_message(stdscr, "Logging out...", 1)
+            break
+        elif result == "Applications":
+            apps_menu(stdscr)
+        elif result == "Documents":
+            documents_menu(stdscr)
+        elif result == "Games":
+            games_menu(stdscr)
+        elif result == "Network":
+            network_menu(stdscr)
+        elif result == "Settings":
+            settings_menu(stdscr)
+
+    # Stop status thread before curses tears down
+    status_running = False
+    _stdscr_ref = None
+    t.join(timeout=2)
+    # Cleanup handled by finally block in __main__
+
 if __name__ == "__main__":
-    mainmenu()
+    stdscr = curses.initscr()
+    try:
+        curses.noecho()
+        curses.cbreak()
+        stdscr.keypad(True)
+        main(stdscr)
+    finally:
+        stdscr.keypad(False)
+        curses.nocbreak()
+        curses.echo()
+        curses.endwin()
+        os.system('clear')
+        sys.exit(0)
