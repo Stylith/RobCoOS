@@ -2,10 +2,104 @@ import os
 import sys
 import curses
 import threading
+import subprocess
 
+# ─── Base dir ─────────────────────────────────────────────────────────────────
+base_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(base_dir)
+sys.path.insert(0, base_dir)
+
+from checks import has_tmux, in_tmux, run_preflight
+
+# ─── Dependency preflight ─────────────────────────────────────────────────────
+def preflight_gate():
+    ok, warnings, errors = run_preflight()
+    if not ok:
+        print("\n╔══════════════════════════════════════════════════╗")
+        print("║         RobcOS - Dependency Error                ║")
+        print("╚══════════════════════════════════════════════════╝")
+        for e in errors:
+            print(f"  ✗ {e}")
+        if warnings:
+            print()
+            for w in warnings:
+                print(f"  ! {w}")
+        print("\nPlease install the missing required dependencies and try again.")
+        sys.exit(1)
+    if warnings:
+        print("\n╔══════════════════════════════════════════════════╗")
+        print("║     RobcOS - Optional Dependencies Missing       ║")
+        print("╚══════════════════════════════════════════════════╝")
+        for w in warnings:
+            print(f"  ! {w}")
+        print("\nSome features will be unavailable. Press Enter to continue...")
+        input()
+
+# ─── Tmux helpers ─────────────────────────────────────────────────────────────
+SESSION_NAME = "robcos"
+NUM_WINDOWS  = 4
+
+def tmux_session_exists():
+    r = subprocess.run(["tmux", "has-session", "-t", SESSION_NAME], capture_output=True)
+    return r.returncode == 0
+
+def kill_all_sessions():
+    subprocess.run(["tmux", "kill-session", "-t", SESSION_NAME], capture_output=True)
+
+def launch_in_tmux():
+    script = os.path.abspath(__file__)
+
+    if not has_tmux():
+        print("Warning: tmux not found. Running without desktop switching.")
+        print("Install tmux for multi-window support:")
+        print("  brew install tmux  /  apt install tmux  /  pacman -S tmux")
+        print("\nPress Enter to continue in single-window mode...")
+        input()
+        return False
+
+    if in_tmux():
+        return False  # already inside tmux, run normally
+
+    if tmux_session_exists():
+        os.execvp("tmux", ["tmux", "attach-session", "-t", SESSION_NAME])
+        return True
+
+    # ── Create session ──────────────────────────────────────────────────────
+    # First window gets --first flag so only it plays the bootup animation.
+    # Windows start at index 0 by default; we renumber to 1 after creation
+    # so Ctrl+B 1-4 works as expected.
+    subprocess.run([
+        "tmux", "new-session", "-d",
+        "-s", SESSION_NAME,
+        "-n", "Desktop 1",
+        sys.executable, script, "--no-tmux", "--first"   # ← bootup flag
+    ])
+
+    # Hide tmux status bar so it doesn't bleed into the RobcOS UI
+    subprocess.run(["tmux", "set-option", "-t", SESSION_NAME, "status", "off"])
+
+    # Spawn remaining windows (no --first, so no bootup)
+    for i in range(2, NUM_WINDOWS + 1):
+        subprocess.run([
+            "tmux", "new-window",
+            "-t", f"{SESSION_NAME}:",
+            "-n", f"Desktop {i}",
+            sys.executable, script, "--no-tmux"          # ← no bootup flag
+        ])
+
+    # Renumber all windows starting from 1 so Ctrl+B 1, 2, 3, 4 all work
+    subprocess.run(["tmux", "set-option", "-t", SESSION_NAME, "base-index", "1"])
+    subprocess.run(["tmux", "move-window", "-r", "-t", SESSION_NAME])
+
+    # Land on Desktop 1
+    subprocess.run(["tmux", "select-window", "-t", f"{SESSION_NAME}:1"])
+    os.execvp("tmux", ["tmux", "attach-session", "-t", SESSION_NAME])
+    return True
+
+# ─── Local imports ────────────────────────────────────────────────────────────
 import config
-from config import init_colors, BOOTUP_ON
-from status import (status_bar_thread, set_stdscr_ref, stop_status)
+from config import init_colors
+from status import status_bar_thread, set_stdscr_ref, stop_status
 from ui import run_menu, curses_message
 from config import playsound
 from apps import apps_menu, games_menu, network_menu
@@ -15,19 +109,14 @@ from terminal import embedded_terminal
 from settings import settings_menu
 from boot import bootup_curses
 
-# ─── Base dir ─────────────────────────────────────────────────────────────────
-base_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(base_dir)
-
-# ─── Main ─────────────────────────────────────────────────────────────────────
-def main(stdscr):
+# ─── Main curses loop ─────────────────────────────────────────────────────────
+def main(stdscr, show_bootup=True):
     set_stdscr_ref(stdscr)
-
     curses.curs_set(0)
     stdscr.keypad(True)
     init_colors()
 
-    if config.BOOTUP_ON:
+    if config.BOOTUP_ON and show_bootup:
         bootup_curses(stdscr)
 
     t = threading.Thread(target=status_bar_thread, daemon=True)
@@ -62,13 +151,30 @@ def main(stdscr):
     set_stdscr_ref(None)
     t.join(timeout=2)
 
+    # Logout from any desktop kills the whole session — all desktops close
+    if in_tmux() and has_tmux():
+        kill_all_sessions()
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    no_tmux  = "--no-tmux"  in sys.argv
+    is_first = "--first"    in sys.argv   # explicitly set on first window only
+
+    if not no_tmux:
+        preflight_gate()
+        launched = launch_in_tmux()
+        if launched:
+            sys.exit(0)
+
+    # show_bootup is True only when --first is passed, or when not in tmux at all
+    show_bootup = is_first or not in_tmux()
+
     stdscr = curses.initscr()
     try:
         curses.noecho()
         curses.cbreak()
         stdscr.keypad(True)
-        main(stdscr)
+        main(stdscr, show_bootup=show_bootup)
     finally:
         stdscr.keypad(False)
         curses.nocbreak()

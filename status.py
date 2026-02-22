@@ -32,6 +32,21 @@ def draw_header(win):
         except curses.error:
             pass
 
+def _get_tmux_window():
+    """Return e.g. '[ Desktop 2 ]' if in tmux, else empty string."""
+    try:
+        import os, subprocess
+        if "TMUX" not in os.environ:
+            return ""
+        r = subprocess.run(
+            ["tmux", "display-message", "-p", "#I"],
+            capture_output=True, text=True, timeout=0.5
+        )
+        idx = r.stdout.strip()
+        return f"[ Desktop {idx} ]" if idx else ""
+    except Exception:
+        return ""
+
 def draw_status(win):
     h, w = win.getmaxyx()
     now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
@@ -46,6 +61,13 @@ def draw_status(win):
         try:
             win.addstr(h - 1, w - 2 - len(batt_status), batt_status,
                        curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        except curses.error:
+            pass
+    desktop = _get_tmux_window()
+    if desktop:
+        x = max(0, (w - len(desktop)) // 2)
+        try:
+            win.addstr(h - 1, x, desktop, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
         except curses.error:
             pass
 
