@@ -12,6 +12,9 @@ def scan_documents(folder: Path):
     return [f for f in folder.iterdir()
             if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS]
 
+def scan_subfolders(folder: Path):
+    return sorted([f for f in folder.iterdir() if f.is_dir()], key=lambda d: d.name.lower())
+
 def sort_key(f):
     name = f.stem.replace("_", " ").lower()
     if name.startswith("the "):
@@ -20,9 +23,12 @@ def sort_key(f):
 
 # ─── Journal editor ───────────────────────────────────────────────────────────
 def journal_new(stdscr):
+    from config import get_current_user
     current_date = date.today()
-    journal_dir  = Path("journal_entries")
-    journal_dir.mkdir(exist_ok=True)
+    base_journal = Path("journal_entries")
+    user         = get_current_user()
+    journal_dir  = base_journal / user if user else base_journal
+    journal_dir.mkdir(parents=True, exist_ok=True)
     lines      = [""]
     cursor_row = 0
     cursor_col = 0
@@ -192,7 +198,10 @@ def journal_edit(stdscr, path):
             cursor_col += 1
 
 def journal_view(stdscr):
-    directory_path = Path("journal_entries")
+    from config import get_current_user
+    user = get_current_user()
+    base = Path("journal_entries")
+    directory_path = base / user if user else base
     if not directory_path.exists():
         curses_message(stdscr, "Error: journal_entries folder not found.")
         return
@@ -235,6 +244,30 @@ def logs_menu(stdscr):
             journal_view(stdscr)
 
 # ─── Documents menu ───────────────────────────────────────────────────────────
+def _browse_folder(stdscr, folder: Path, title: str):
+    """Recursively browse a folder, showing subfolders and documents."""
+    while True:
+        subfolders = scan_subfolders(folder)
+        files      = sorted(scan_documents(folder), key=sort_key)
+
+        if not subfolders and not files:
+            curses_message(stdscr, "No documents or subfolders found.")
+            return
+
+        # Build menu: subfolders first (with trailing /), then files
+        folder_entries = {f.name + "/": f for f in subfolders}
+        file_map       = {f.stem.replace("_", " "): f for f in files}
+        choices        = list(folder_entries.keys()) + list(file_map.keys()) + ["---", "Back"]
+        subtitle       = str(folder)
+
+        sel = run_menu(stdscr, title, choices, subtitle=subtitle)
+        if sel in (None, "Back"):
+            return
+        elif sel in folder_entries:
+            _browse_folder(stdscr, folder_entries[sel], sel.rstrip("/"))
+        elif sel in file_map:
+            launch_epy(stdscr, file_map[sel])
+
 def documents_menu(stdscr):
     while True:
         categories = load_categories()
@@ -246,18 +279,8 @@ def documents_menu(stdscr):
         elif result == "Logs":
             logs_menu(stdscr)
         elif result in categories:
-            folder = Path(categories[result]).expanduser()
-            while True:
-                files = scan_documents(folder)
-                if not files:
-                    curses_message(stdscr, "No supported documents found.")
-                    break
-                files.sort(key=sort_key)
-                file_map    = {f.stem.replace("_", " "): f for f in files}
-                file_result = run_menu(stdscr, result,
-                                       list(file_map.keys()) + ["Back"],
-                                       subtitle=f"Select {result}")
-                if file_result == "Back":
-                    break
-                elif file_result in file_map:
-                    launch_epy(stdscr, file_map[file_result])
+            root = Path(categories[result]).expanduser()
+            if not root.exists() or not root.is_dir():
+                curses_message(stdscr, f"Error: '{categories[result]}' not found. Remove it in Edit Menus.")
+                continue
+            _browse_folder(stdscr, root, result)
