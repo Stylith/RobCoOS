@@ -88,7 +88,16 @@ def launch_in_tmux():
             sys.executable, script, "--no-tmux"          # ← no bootup flag
         ])
 
-    # Renumber all windows starting from 1 so Ctrl+B 1, 2, 3, 4 all work
+    # 5th window: plain system terminal
+    shell = os.environ.get("SHELL", "/bin/bash")
+    subprocess.run([
+        "tmux", "new-window",
+        "-t", f"{SESSION_NAME}:",
+        "-n", "Terminal",
+        shell
+    ])
+
+    # Renumber all windows starting from 1 so Ctrl+B 1-5 all work
     subprocess.run(["tmux", "set-option", "-t", SESSION_NAME, "base-index", "1"])
     subprocess.run(["tmux", "move-window", "-r", "-t", SESSION_NAME])
 
