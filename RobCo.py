@@ -112,7 +112,7 @@ def draw_status(win):
     try:
         if battery is None:
             batt_status = ""
-        win.addstr(h-1, w - 2 - len(batt_status), batt_status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        win.addstr(h-1, w - 1 - len(batt_status), batt_status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
     except curses.error:
         pass
 
@@ -520,7 +520,7 @@ def journal_new(stdscr):
         stdscr.refresh()
         key = stdscr.getch()
 
-        if key == 23:  # Ctrl+S save
+        if key == 23:  # Ctrl+W save
             text = "\n".join(lines).strip()
             if text:
                 file_name = x / f"{current_date}.txt"
@@ -771,7 +771,7 @@ def appstore_menu(stdscr):
     MAX_PER_PAGE = 20
 
     while True:
-        result = run_menu(stdscr, "Program Installer", ["Search", "Installed Apps", "---", "Back"],
+        result = run_menu(stdscr, "ROBCO SOFTWARE DEPLOYMENT INTERFACE", ["Search", "Installed Apps", "---", "Back"],
                           subtitle=f"Package Manager: {pm or 'Not Found'}")
         if result == "Back":
             break
@@ -808,7 +808,7 @@ def appstore_menu(stdscr):
                     choices.append("> Next Page")
                 choices += ["---", "Back"]
 
-                pkg_result = run_menu(stdscr, "Program Installer", choices,
+                pkg_result = run_menu(stdscr, "ROBCO SOFTWARE DEPLOYMENT INTERFACE", choices,
                                       subtitle=f"Results: {query}  |  Page {page + 1}/{total_pages}")
                 if pkg_result == "Back":
                     break
@@ -825,7 +825,7 @@ def appstore_menu(stdscr):
                     else:
                         info = get_package_info(pm, pkg) if has_internet() else "No internet - description unavailable."
                         curses_pager(stdscr, f"{pkg}\n\n{info}", title="Package Info")
-                        if curses_confirm(stdscr, f"Install {pkg}?"):
+                        if curses_confirm(stdscr, f"DEPLOY SOFTWARE PACKAGE: {pkg}?"):
                             flags = PACKAGE_MANAGERS.get(pm, [])
                             if pm == "brew":
                                 launch_cmd = [pm, "install"] + flags + [pkg]
@@ -1302,7 +1302,7 @@ def main(stdscr):
 
     while True:
         result = run_menu(stdscr, "Main Menu",
-                          ["Applications", "Documents", "Network", "Games", "Program Installer", "Terminal",
+                          ["Applications", "Documents", "Network", "Games", "ROBCO SOFTWARE DEPLOYMENT", "Terminal",
                            "---", "Settings", "Logout"], subtitle="RobcOS v.85")
         if result == "Logout":
             playsound('Sounds/ui_hacking_passbad.wav', False)
@@ -1316,7 +1316,7 @@ def main(stdscr):
             games_menu(stdscr)
         elif result == "Network":
             network_menu(stdscr)
-        elif result == "Program Installer":
+        elif result == "ROBCO SOFTWARE DEPLOYMENT":
             appstore_menu(stdscr)
         elif result == "Terminal":
             embedded_terminal(stdscr)
