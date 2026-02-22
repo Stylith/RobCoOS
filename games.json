@@ -1,0 +1,31 @@
+{
+    "Tetris": [
+        "tetris"
+    ],
+    "Sudoku": [
+        "nudoku",
+        "-c",
+        "-d",
+        "normal"
+    ],
+    "Pip-Man": [
+        "myman",
+        "-n"
+    ],
+    "Rogue": [
+        "rogue"
+    ],
+    "Nethack": [
+        "nethack"
+    ],
+    "Chem Wars": [
+        "dopewars",
+        "-b"
+    ],
+    "BSD Games": [
+        "nbsdgames"
+    ],
+    "Zeta Invaders": [
+        "ninvaders"
+    ]
+}
