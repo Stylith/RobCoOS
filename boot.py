@@ -93,4 +93,10 @@ def bootup_curses(stdscr):
     stdscr.erase()
     stdscr.noutrefresh()
     curses.doupdate()
-    _halfdelay()  # restore halfdelay after boot animation
+    # Drain every keypress queued during the animation at the OS/tty level.
+    # flushinp() only clears curses's own typeahead — this catches the rest.
+    stdscr.nodelay(True)
+    while stdscr.getch() != -1:
+        pass
+    stdscr.nodelay(False)
+    _halfdelay()

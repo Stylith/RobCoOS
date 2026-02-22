@@ -10,6 +10,7 @@ from config import (COLOR_NORMAL, COLOR_DIM, THEMES,
                     load_about, save_about)
 from status import draw_header, draw_separator, draw_status
 from ui import run_menu, curses_input, curses_message
+from auth import user_management_menu
 
 ALL_FIELDS = ["OS", "Hostname", "CPU", "RAM", "Uptime", "Battery", "Theme", "Shell", "Python"]
 
@@ -130,17 +131,19 @@ def theme_menu(stdscr):
         save_all_settings()
         init_colors()
 
-def settings_menu(stdscr):
+def settings_menu(stdscr, current_user=None):
     from apps import edit_menus_menu
     while True:
         import config
         sound_label  = "Sound: ON  [toggle]" if config.SOUND_ON  else "Sound: OFF [toggle]"
         bootup_label = "Bootup: ON [toggle]" if config.BOOTUP_ON else "Bootup: OFF [toggle]"
         result = run_menu(stdscr, "Settings Menu",
-                          ["About", "Theme", "Edit Menus",
+                          ["About", "Theme", "Edit Menus", "User Management",
                            bootup_label, sound_label, "---", "Back"])
         if result == "Back":
             break
+        elif result == "User Management":
+            user_management_menu(stdscr, current_user)
         elif result == "About":
             about_screen(stdscr)
         elif result == "Theme":

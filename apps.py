@@ -99,7 +99,7 @@ def edit_network_menu(stdscr):
             delete_entry(stdscr, load_networks(), save_networks, "Network Program")
 
 def edit_menus_menu(stdscr):
-    from documents import edit_documents_menu
+    from docedit import edit_documents_menu
     while True:
         result = run_menu(stdscr, "Edit Menus",
                           ["Edit Applications", "Edit Documents",

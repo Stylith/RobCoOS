@@ -119,6 +119,7 @@ def main(stdscr, show_bootup=True):
     from terminal import embedded_terminal
     from settings import settings_menu
     from boot import bootup_curses
+    from auth import login_screen, clear_session
 
     curses.curs_set(0)
     stdscr.keypad(True)
@@ -129,6 +130,11 @@ def main(stdscr, show_bootup=True):
 
     # halfdelay drives status bar refreshes — no thread needed
     _halfdelay()
+
+    # Retry loop — a buffered Enter producing an empty login must not kill the window
+    current_user = None
+    while current_user is None:
+        current_user = login_screen(stdscr)
 
     while True:
         result = run_menu(stdscr, "Main Menu",
@@ -153,9 +159,10 @@ def main(stdscr, show_bootup=True):
         elif result == "Terminal":
             embedded_terminal(stdscr)
         elif result == "Settings":
-            settings_menu(stdscr)
+            settings_menu(stdscr, current_user)
 
-    # Logout from any desktop kills the whole session — all desktops close
+    # Clear shared session token then kill all tmux windows
+    clear_session()
     if in_tmux() and has_tmux():
         kill_all_sessions()
 

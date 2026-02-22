@@ -12,6 +12,7 @@ def _halfdelay():
 def run_menu(stdscr, title, choices, subtitle=""):
     selectable = [c for c in choices if c != "---"]
     idx = 0
+    curses.flushinp()
     _halfdelay()
 
     while True:
@@ -74,6 +75,7 @@ def run_menu(stdscr, title, choices, subtitle=""):
 # ─── Input helpers ────────────────────────────────────────────────────────────
 def curses_input(stdscr, prompt):
     h, w = stdscr.getmaxyx()
+    col = 4
     stdscr.erase()
     draw_header(stdscr)
     try:
@@ -82,19 +84,42 @@ def curses_input(stdscr, prompt):
         stdscr.addstr(7, 2, "> ", curses.color_pair(COLOR_NORMAL))
     except curses.error:
         pass
-    curses.echo()
+    curses.flushinp()
+    curses.nocbreak()
+    curses.cbreak()
+    curses.noecho()
     curses.curs_set(1)
-    curses.cbreak()          # disable halfdelay for clean line input
     stdscr.noutrefresh()
     curses.doupdate()
-    try:
-        inp = stdscr.getstr(7, 4, w - 6).decode("utf-8")
-    except Exception:
-        inp = ""
-    curses.noecho()
+    buf = []
+    while True:
+        key = stdscr.getch()
+        if key in (10, 13):
+            break
+        elif key == 27:
+            buf = []
+            break
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            if buf:
+                buf.pop()
+                try:
+                    stdscr.addstr(7, col + len(buf), " ",
+                                  curses.color_pair(COLOR_NORMAL))
+                    stdscr.move(7, col + len(buf))
+                except curses.error:
+                    pass
+        elif 32 <= key <= 126 and len(buf) < w - 6:
+            buf.append(chr(key))
+            try:
+                stdscr.addstr(7, col + len(buf) - 1, chr(key),
+                              curses.color_pair(COLOR_NORMAL))
+            except curses.error:
+                pass
+        stdscr.noutrefresh()
+        curses.doupdate()
     curses.curs_set(0)
-    _halfdelay()             # restore
-    return inp.strip()
+    _halfdelay()
+    return "".join(buf).strip()
 
 def curses_confirm(stdscr, message):
     curses.flushinp()        # discard buffered keypresses (e.g. Enter from previous menu)
