@@ -125,8 +125,6 @@ def about_screen(stdscr):
 
 def theme_menu(stdscr):
     result = run_menu(stdscr, "Select Theme", list(THEMES.keys()) + ["---", "Back"])
-    if result == "__SWITCH__":
-        return "__SWITCH__"
     if result != "Back" and result in THEMES:
         set_theme(result)
         save_all_settings()

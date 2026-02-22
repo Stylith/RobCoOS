@@ -97,27 +97,30 @@ def curses_input(stdscr, prompt):
     return inp.strip()
 
 def curses_confirm(stdscr, message):
+    curses.flushinp()        # discard buffered keypresses (e.g. Enter from previous menu)
+    curses.nocbreak()        # fully exit halfdelay before re-entering cbreak
+    curses.cbreak()
+    curses.noecho()
+    curses.curs_set(0)
     h, w = stdscr.getmaxyx()
     stdscr.erase()
     draw_header(stdscr)
-    full = message + " (y/n): "
+    prompt = message + "  [y/n]"
     try:
-        stdscr.addstr(5, 2, full, curses.color_pair(COLOR_NORMAL))
+        stdscr.addstr(5, 2, prompt, curses.color_pair(COLOR_NORMAL))
     except curses.error:
         pass
-    curses.echo()
-    curses.curs_set(1)
-    curses.cbreak()          # disable halfdelay
     stdscr.noutrefresh()
     curses.doupdate()
-    try:
-        ans = stdscr.getstr(5, 2 + len(full), 3).decode("utf-8").strip().lower()
-    except Exception:
-        ans = ""
-    curses.noecho()
-    curses.curs_set(0)
-    _halfdelay()             # restore
-    return ans == "y"
+    # Wait directly for y or n — no getstr, no timeout issues
+    while True:
+        key = stdscr.getch()
+        if key == ord('y'):
+            _halfdelay()
+            return True
+        elif key in (ord('n'), ord('N'), 27, ord('q')):
+            _halfdelay()
+            return False
 
 def curses_message(stdscr, message, delay=1.5):
     h, w = stdscr.getmaxyx()

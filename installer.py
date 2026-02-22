@@ -208,10 +208,34 @@ def appstore_menu(stdscr):
                     info = (get_package_info(pm, pkg) if has_internet()
                             else "No internet - description unavailable.")
                     action = run_menu(stdscr, pkg,
-                                      ["Update", "Uninstall", "Add to Menu", "---", "Back"],
+                                      ["Update", "Reinstall", "Uninstall", "Add to Menu", "---", "Back"],
                                       subtitle=info)
-                    if action == "__SWITCH__":
-                        return "__SWITCH__"
+                    if action == "Reinstall":
+                        if not has_internet():
+                            curses_message(stdscr, "Error: No internet connection.")
+                        elif curses_confirm(stdscr, f"Reinstall {pkg}?"):
+                            flags = PACKAGE_MANAGERS.get(pm, [])
+                            # Each PM has its own reinstall syntax
+                            if pm == "brew":
+                                launch_cmd = ["brew", "reinstall"] + flags + [pkg]
+                            elif pm in ("apt", "apt-get"):
+                                launch_cmd = ["sudo", pm, "install", "--reinstall"] + flags + [pkg]
+                            elif pm == "dnf":
+                                launch_cmd = ["sudo", "dnf", "reinstall"] + flags + [pkg]
+                            elif pm == "pacman":
+                                launch_cmd = ["sudo", "pacman", "-S"] + flags + [pkg]
+                            elif pm == "zypper":
+                                launch_cmd = ["sudo", "zypper", "install", "--force"] + flags + [pkg]
+                            else:
+                                curses_message(stdscr, f"Reinstall not supported for {pm}.")
+                                continue
+                            _suspend(stdscr)
+                            proc = subprocess.run(launch_cmd)
+                            _resume(stdscr)
+                            if proc.returncode == 0:
+                                curses_box_message(stdscr, f"{pkg} reinstalled.")
+                            else:
+                                curses_box_message(stdscr, f"Failed to reinstall {pkg}.")
                     elif action == "Uninstall":
                         if curses_confirm(stdscr, f"Uninstall {pkg}?"):
                             flags = PACKAGE_MANAGERS.get(pm, [])
@@ -241,8 +265,6 @@ def appstore_menu(stdscr):
                     elif action == "Add to Menu":
                         menu_choice = run_menu(stdscr, "Add to Menu",
                                                ["Applications", "Games", "Network", "---", "Back"])
-                        if menu_choice == "__SWITCH__":
-                            return "__SWITCH__"
                         if menu_choice != "Back":
                             display_name = curses_input(stdscr, f"Enter display name for '{pkg}':")
                             if not display_name:
