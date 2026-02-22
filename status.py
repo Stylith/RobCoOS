@@ -32,44 +32,64 @@ def draw_header(win):
         except curses.error:
             pass
 
-def _get_tmux_window():
-    """Return e.g. '[ Desktop 2 ]' if in tmux, else empty string."""
+def _get_tmux_tabs():
+    """Return e.g. '[1*] [2] [3] [4]' with * marking the active window."""
     try:
         import os, subprocess
         if "TMUX" not in os.environ:
             return ""
-        r = subprocess.run(
+        # Current window index
+        cur = subprocess.run(
             ["tmux", "display-message", "-p", "#I"],
             capture_output=True, text=True, timeout=0.5
-        )
-        idx = r.stdout.strip()
-        return f"[ Desktop {idx} ]" if idx else ""
+        ).stdout.strip()
+        # All window indices in the current session (no -t needed when inside tmux)
+        wins = subprocess.run(
+            ["tmux", "list-windows", "-F", "#I"],
+            capture_output=True, text=True, timeout=0.5
+        ).stdout.strip().split()
+        if not wins or not cur:
+            return ""
+        return "  ".join(f"[{w}*]" if w == cur else f"[{w}]" for w in wins)
     except Exception:
         return ""
 
 def draw_status(win):
+    import os as _os
     h, w = win.getmaxyx()
     now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
-    status = now.ljust(w)[:w - 1]
+
+    # Fill bar
     try:
-        win.addstr(h - 1, 0, status, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+        win.addstr(h - 1, 0, " " * (w - 1), curses.color_pair(COLOR_STATUS))
     except curses.error:
         pass
+
+    # Left: date
+    try:
+        win.addstr(h - 1, 1, now, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+    # Right: battery
     battery = psutil.sensors_battery()
     if battery:
-        batt_status = f"{battery.percent} %"
+        batt_status = f"{battery.percent:.0f} %"
         try:
             win.addstr(h - 1, w - 2 - len(batt_status), batt_status,
                        curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
         except curses.error:
             pass
-    desktop = _get_tmux_window()
-    if desktop:
-        x = max(0, (w - len(desktop)) // 2)
-        try:
-            win.addstr(h - 1, x, desktop, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
-        except curses.error:
-            pass
+
+    # Center: tmux tabs
+    if "TMUX" in _os.environ:
+        tabs = _get_tmux_tabs()
+        if tabs:
+            x = max(0, (w - len(tabs)) // 2)
+            try:
+                win.addstr(h - 1, x, tabs, curses.color_pair(COLOR_STATUS) | curses.A_BOLD)
+            except curses.error:
+                pass
 
 
 def draw_separator(win, row, w):

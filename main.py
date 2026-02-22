@@ -96,21 +96,20 @@ def launch_in_tmux():
     os.execvp("tmux", ["tmux", "attach-session", "-t", SESSION_NAME])
     return True
 
-# ─── Local imports ────────────────────────────────────────────────────────────
-import config
-from config import init_colors
-from status import status_bar_thread, set_stdscr_ref, stop_status
-from ui import run_menu, curses_message
-from config import playsound
-from apps import apps_menu, games_menu, network_menu
-from documents import documents_menu
-from installer import appstore_menu
-from terminal import embedded_terminal
-from settings import settings_menu
-from boot import bootup_curses
-
 # ─── Main curses loop ─────────────────────────────────────────────────────────
 def main(stdscr, show_bootup=True):
+    # All local imports are deferred to here so preflight runs first
+    import config
+    from config import init_colors, playsound
+    from status import status_bar_thread, set_stdscr_ref, stop_status
+    from ui import run_menu, curses_message
+    from apps import apps_menu, games_menu, network_menu
+    from documents import documents_menu
+    from installer import appstore_menu
+    from terminal import embedded_terminal
+    from settings import settings_menu
+    from boot import bootup_curses
+
     set_stdscr_ref(stdscr)
     curses.curs_set(0)
     stdscr.keypad(True)
@@ -157,16 +156,17 @@ def main(stdscr, show_bootup=True):
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    no_tmux  = "--no-tmux"  in sys.argv
-    is_first = "--first"    in sys.argv   # explicitly set on first window only
+    no_tmux  = "--no-tmux" in sys.argv
+    is_first = "--first"   in sys.argv
 
     if not no_tmux:
+        # Preflight runs before any local imports — missing deps shown cleanly
         preflight_gate()
         launched = launch_in_tmux()
         if launched:
             sys.exit(0)
 
-    # show_bootup is True only when --first is passed, or when not in tmux at all
+    # show_bootup is True only when --first is passed, or not in tmux at all
     show_bootup = is_first or not in_tmux()
 
     stdscr = curses.initscr()
