@@ -106,3 +106,11 @@ HEADER_LINES = [
     "COPYRIGHT 2075-2077 ROBCO INDUSTRIES",
     "-SERVER 1-",
 ]
+
+# ─── Tmux / desktop ───────────────────────────────────────────────────────────
+SESSION_NAME  = "robcos"
+NUM_WINDOWS   = 4
+
+# ─── Input timeout (halfdelay units = tenths of a second) ─────────────────────
+# 2 = 200ms: getch returns -1 if no key pressed, used to drive status redraws
+INPUT_TIMEOUT = 2

@@ -2,7 +2,8 @@ import curses
 import time
 import itertools
 import random
-from config import COLOR_NORMAL, playsound
+from config import COLOR_NORMAL, INPUT_TIMEOUT, playsound
+from ui import _halfdelay
 
 def bootup_curses(stdscr):
     stdscr.nodelay(True)
@@ -51,7 +52,8 @@ def bootup_curses(stdscr):
                         col += 1
                     except curses.error:
                         pass
-                    stdscr.refresh()
+                    stdscr.noutrefresh()
+                    curses.doupdate()
                     time.sleep(delay)
                 if done:
                     break
@@ -71,7 +73,8 @@ def bootup_curses(stdscr):
                         col += 1
                     except curses.error:
                         pass
-                stdscr.refresh()
+                stdscr.noutrefresh()
+                curses.doupdate()
                 time.sleep(delay)
         if done:
             break
@@ -87,5 +90,7 @@ def bootup_curses(stdscr):
         stdscr.erase()
 
     playsound('Sounds/ui_hacking_passgood.wav')
-    stdscr.nodelay(False)
     stdscr.erase()
+    stdscr.noutrefresh()
+    curses.doupdate()
+    _halfdelay()  # restore halfdelay after boot animation

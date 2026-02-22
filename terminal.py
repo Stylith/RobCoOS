@@ -3,11 +3,11 @@ import curses
 import pty
 import select
 import pyte
-from config import COLOR_SELECTED, COLOR_STATUS
-from status import set_status_paused
+from config import COLOR_SELECTED, COLOR_STATUS, INPUT_TIMEOUT
+from status import draw_status
+from ui import _halfdelay
 
 def embedded_terminal(stdscr):
-    set_status_paused(True)
     shell = os.environ.get("SHELL", "/bin/bash")
     h, w = stdscr.getmaxyx()
     env = os.environ.copy()
@@ -20,7 +20,7 @@ def embedded_terminal(stdscr):
         os.execvpe(shell, [shell, "--no-rcs", "-f"], env)
     else:
         stdscr.keypad(False)
-        stdscr.nodelay(True)
+        stdscr.nodelay(True)   # non-blocking for the terminal render loop
         while True:
             h, w = stdscr.getmaxyx()
             screen.resize(h - 2, w)
@@ -51,11 +51,14 @@ def embedded_terminal(stdscr):
                 stdscr.move(screen.cursor.y + 1, screen.cursor.x)
             except curses.error:
                 pass
-            stdscr.refresh()
+            stdscr.noutrefresh()
+            curses.doupdate()
             key = stdscr.getch()
             if key == 24:  # Ctrl+X
                 os.kill(pid, 9)
                 break
+            elif key == curses.KEY_RESIZE:
+                pass  # screen.resize handles it next iteration
             elif key != -1:
                 if key < 256:
                     os.write(fd, bytes([key]))
@@ -64,4 +67,4 @@ def embedded_terminal(stdscr):
         os.waitpid(pid, 0)
         stdscr.keypad(True)
         stdscr.nodelay(False)
-        set_status_paused(False)
+        _halfdelay()  # restore halfdelay after terminal exits

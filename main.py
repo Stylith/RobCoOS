@@ -1,7 +1,6 @@
 import os
 import sys
 import curses
-import threading
 import subprocess
 
 # ─── Base dir ─────────────────────────────────────────────────────────────────
@@ -36,17 +35,19 @@ def preflight_gate():
         input()
 
 # ─── Tmux helpers ─────────────────────────────────────────────────────────────
-SESSION_NAME = "robcos"
-NUM_WINDOWS  = 4
+# SESSION_NAME and NUM_WINDOWS live in config.py
 
 def tmux_session_exists():
+    from config import SESSION_NAME
     r = subprocess.run(["tmux", "has-session", "-t", SESSION_NAME], capture_output=True)
     return r.returncode == 0
 
 def kill_all_sessions():
+    from config import SESSION_NAME
     subprocess.run(["tmux", "kill-session", "-t", SESSION_NAME], capture_output=True)
 
 def launch_in_tmux():
+    from config import SESSION_NAME, NUM_WINDOWS
     script = os.path.abspath(__file__)
 
     if not has_tmux():
@@ -98,11 +99,11 @@ def launch_in_tmux():
 
 # ─── Main curses loop ─────────────────────────────────────────────────────────
 def main(stdscr, show_bootup=True):
-    # All local imports are deferred to here so preflight runs first
+    # All local imports deferred so preflight runs first
     import config
-    from config import init_colors, playsound
-    from status import status_bar_thread, set_stdscr_ref, stop_status
-    from ui import run_menu, curses_message
+    from config import init_colors, playsound, SESSION_NAME, NUM_WINDOWS
+    from status import draw_status
+    from ui import run_menu, curses_message, _halfdelay
     from apps import apps_menu, games_menu, network_menu
     from documents import documents_menu
     from installer import appstore_menu
@@ -110,7 +111,6 @@ def main(stdscr, show_bootup=True):
     from settings import settings_menu
     from boot import bootup_curses
 
-    set_stdscr_ref(stdscr)
     curses.curs_set(0)
     stdscr.keypad(True)
     init_colors()
@@ -118,8 +118,8 @@ def main(stdscr, show_bootup=True):
     if config.BOOTUP_ON and show_bootup:
         bootup_curses(stdscr)
 
-    t = threading.Thread(target=status_bar_thread, daemon=True)
-    t.start()
+    # halfdelay drives status bar refreshes — no thread needed
+    _halfdelay()
 
     while True:
         result = run_menu(stdscr, "Main Menu",
@@ -145,10 +145,6 @@ def main(stdscr, show_bootup=True):
             embedded_terminal(stdscr)
         elif result == "Settings":
             settings_menu(stdscr)
-
-    stop_status()
-    set_stdscr_ref(None)
-    t.join(timeout=2)
 
     # Logout from any desktop kills the whole session — all desktops close
     if in_tmux() and has_tmux():

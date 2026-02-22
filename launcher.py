@@ -2,11 +2,10 @@ import os
 import curses
 import subprocess
 import time
-from config import init_colors
-from status import set_status_paused
+from config import init_colors, INPUT_TIMEOUT
+from ui import _halfdelay
 
 def _suspend(stdscr):
-    set_status_paused(True)
     time.sleep(1.1)
     curses.endwin()
     os.system('tput reset')
@@ -21,8 +20,9 @@ def _resume(stdscr):
     init_colors()
     stdscr.clearok(True)
     stdscr.clear()
-    stdscr.refresh()
-    set_status_paused(False)
+    stdscr.noutrefresh()
+    curses.doupdate()
+    _halfdelay()  # restore halfdelay after returning from external app
 
 def launch_subprocess(stdscr, cmd):
     _suspend(stdscr)
