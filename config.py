@@ -20,11 +20,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".epub", ".txt", ".mobi", ".azw3"}
 # ─── Current user (set after login) ──────────────────────────────────────────
 _current_user: str | None = None
 
-def set_current_user(username: str):
+def set_current_user(username):
     global _current_user
     _current_user = username
-    # Load this user's settings into globals immediately
-    _load_user_settings()
+    if username:
+        _load_user_settings()
 
 def get_current_user() -> str | None:
     return _current_user
@@ -173,6 +173,11 @@ HEADER_LINES = [
 # ─── Tmux / desktop ───────────────────────────────────────────────────────────
 SESSION_NAME = "robcos"
 NUM_WINDOWS  = 4
+
+# ─── Logout signal ───────────────────────────────────────────────────────────
+class LogoutException(Exception):
+    """Raised anywhere in the call stack to force an immediate return to login."""
+    pass
 
 # ─── Input timeout ────────────────────────────────────────────────────────────
 INPUT_TIMEOUT = 2

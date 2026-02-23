@@ -110,7 +110,7 @@ def launch_in_tmux():
 def main(stdscr, show_bootup=True):
     # All local imports deferred so preflight runs first
     import config
-    from config import init_colors, playsound, SESSION_NAME, NUM_WINDOWS
+    from config import init_colors, playsound, SESSION_NAME, NUM_WINDOWS, LogoutException
     from status import draw_status
     from ui import run_menu, curses_message, _halfdelay
     from apps import apps_menu, games_menu, network_menu
@@ -142,33 +142,51 @@ def main(stdscr, show_bootup=True):
             break
         set_current_user(current_user)
 
-        while True:
-            result = run_menu(stdscr, "Main Menu",
-                              ["Applications", "Documents", "Network", "Games",
-                               "Program Installer", "Terminal",
-                               "---", "Settings", "Logout"],
-                              subtitle="RobcOS v.85")
-            if result == "Logout":
-                playsound('Sounds/ui_hacking_passbad.wav', False)
-                curses_message(stdscr, "Logging out...", 1)
-                clear_session()
-                break   # inner break → back to login screen
-            elif result == "Applications":
-                apps_menu(stdscr)
-            elif result == "Documents":
-                documents_menu(stdscr)
-            elif result == "Games":
-                games_menu(stdscr)
-            elif result == "Network":
-                network_menu(stdscr)
-            elif result == "Program Installer":
-                appstore_menu(stdscr)
-            elif result == "Terminal":
-                embedded_terminal(stdscr)
-            elif result == "Settings":
-                settings_menu(stdscr, current_user)
+        try:
+            while True:
+                result = run_menu(stdscr, "Main Menu",
+                                  ["Applications", "Documents", "Network", "Games",
+                                   "Program Installer", "Terminal",
+                                   "---", "Settings", "Logout"],
+                                  subtitle="RobcOS v.85")
+                if result == "Logout":
+                    playsound('Sounds/ui_hacking_passbad.wav', False)
+                    set_current_user(None)   # stop session checks before clearing token
+                    curses_message(stdscr, "Logging out...", 1)
+                    clear_session()
+                    break
+                elif result == "Applications":
+                    apps_menu(stdscr)
+                elif result == "Documents":
+                    documents_menu(stdscr)
+                elif result == "Games":
+                    games_menu(stdscr)
+                elif result == "Network":
+                    network_menu(stdscr)
+                elif result == "Program Installer":
+                    appstore_menu(stdscr)
+                elif result == "Terminal":
+                    embedded_terminal(stdscr)
+                elif result == "Settings":
+                    settings_menu(stdscr, current_user)
+        except LogoutException:
+            set_current_user(None)
+            curses.noecho()
+            curses.curs_set(0)
+            _halfdelay()
+            stdscr.clear()
+        except Exception as _e:
+            import traceback
+            with open("/tmp/robcos_error.log", "a") as _f:
+                _f.write(f"\n--- CRASH ---\n")
+                traceback.print_exc(file=_f)
+            set_current_user(None)
+            curses.noecho()
+            curses.curs_set(0)
+            _halfdelay()
+            stdscr.clear()
 
-    # Reached only when login_screen returns None (Exit chosen) — kill session
+    # Exit from any window kills the whole session
     if in_tmux() and has_tmux():
         kill_all_sessions()
 

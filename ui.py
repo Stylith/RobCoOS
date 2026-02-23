@@ -53,7 +53,21 @@ def run_menu(stdscr, title, choices, subtitle=""):
         key = stdscr.getch()
 
         if key == -1:
-            # Timeout — status already redrawn above, loop again
+            try:
+                import config as _cfg
+                from auth import read_session
+                current = _cfg.get_current_user()
+                token   = read_session()
+                if current and token != current:
+                    # Logged in but token changed — another window logged out/switched
+                    raise _cfg.LogoutException()
+                elif not current and token:
+                    # Not logged in but a token appeared — another window logged in
+                    return "__SESSION_READY__"
+            except _cfg.LogoutException:
+                raise
+            except Exception:
+                pass
             continue
         elif key == curses.KEY_RESIZE:
             init_colors()

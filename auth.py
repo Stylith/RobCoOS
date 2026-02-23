@@ -269,15 +269,14 @@ def _first_time_setup(stdscr):
 def login_screen(stdscr):
     import time
     is_first_window = "--first" in sys.argv
+    # Non-first windows always do a short poll before showing their own login screen.
+    # Covers both startup and post-logout scenarios.
     if "TMUX" in os.environ and not is_first_window:
-        for _ in range(120):
+        for _ in range(20):          # 10s max then show own login
             existing = read_session()
             if existing:
                 return existing
             time.sleep(0.5)
-        existing = read_session()
-        if existing:
-            return existing
 
     users = load_users()
     if not users:
@@ -291,8 +290,13 @@ def login_screen(stdscr):
     while True:
         attempts = 0
         username = run_menu(stdscr, "LOGIN", list(users.keys()) + ["---", "Exit"])
+        if username == "__SESSION_READY__":
+            existing = read_session()
+            if existing:
+                return existing
+            continue
         if username in (None, "Back"):
-            continue   # loop back to user selection
+            continue
         if username == "Exit":
             return "__EXIT__"
 
@@ -452,4 +456,10 @@ def user_management_menu(stdscr, current_user):
             if curses_confirm(stdscr, f"Delete user '{target}'?"):
                 del users[target]
                 save_users(users)
+                # Remove user's personal data folder
+                import shutil
+                from config import USERS_DIR
+                user_dir = USERS_DIR / target
+                if user_dir.exists():
+                    shutil.rmtree(user_dir)
                 curses_message(stdscr, f"User '{target}' deleted.")

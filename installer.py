@@ -94,8 +94,14 @@ def get_installed_packages(pm):
                                     capture_output=True, text=True, timeout=10)
         else:
             return []
-        return [l.split()[0] for l in result.stdout.strip().split("\n")
-                if l.strip() and not l.startswith("WARNING")]
+        pkgs = []
+        for l in result.stdout.strip().split("\n"):
+            if not l.strip() or l.startswith("WARNING") or l.startswith("Listing"):
+                continue
+            name = l.split()[0].split("/")[0]   # strip /source,now for apt
+            if name:
+                pkgs.append(name)
+        return pkgs
     except Exception:
         return []
 
@@ -103,7 +109,6 @@ def appstore_menu(stdscr):
     from auth import is_admin
     from config import get_current_user
     if not is_admin(get_current_user()):
-        from ui import curses_message
         curses_message(stdscr, "Access denied. Admin only.")
         return
     pm = detect_package_manager()
