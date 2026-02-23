@@ -58,9 +58,9 @@ def _hash(password: str, salt: str) -> str:
         iterations=260_000
     ).hex()
 
-def make_user(password: str, role: str = "user") -> dict:
+def make_user(password: str, role: str = "user", no_password: bool = False) -> dict:
     salt = secrets.token_hex(32)
-    return {"salt": salt, "hash": _hash(password, salt), "role": role}
+    return {"salt": salt, "hash": _hash(password, salt), "role": role, "no_password": no_password}
 
 def verify(password: str, record: dict) -> bool:
     try:
@@ -304,13 +304,18 @@ def login_screen(stdscr):
         if username not in users:
             continue
 
+        # Skip password entirely if user has no_password set
+        if users[username].get("no_password"):
+            write_session(username)
+            _show_success(stdscr, f"Welcome, {username}.")
+            return username
+
         while attempts < MAX_ATTEMPTS:
             _draw_login(stdscr, "LOGIN", username=username)
             role_label = f"[{get_role(username)}]"
             try:
                 stdscr.addstr(10, 6, "Password: ",
                               curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-                # Role tag inline after "User: {username}" on the header row
                 user_str = f"User: {username}  {role_label}"
                 stdscr.addstr(8, 6, user_str, curses.color_pair(COLOR_DIM))
             except curses.error:
@@ -355,6 +360,16 @@ def user_management_menu(stdscr, current_user):
             role_choice = run_menu(stdscr, "Select Role", ["user", "admin"])
             if role_choice in (None, "Back"):
                 continue
+            # Ask if no password
+            pw_choice = run_menu(stdscr, "Password", ["Require password", "No password"])
+            if pw_choice in (None, "Back"):
+                continue
+            no_pw = pw_choice == "No password"
+            if no_pw:
+                users[username] = make_user("", role=role_choice, no_password=True)
+                save_users(users)
+                curses_message(stdscr, f"User '{username}' ({role_choice}) added.")
+                continue
             _draw_login(stdscr, "ADD USER")
             try:
                 stdscr.addstr(7, 6, "Password: ",
@@ -387,6 +402,34 @@ def user_management_menu(stdscr, current_user):
             target = run_menu(stdscr, "Change Password",
                               list(users.keys()) + ["---", "Back"])
             if target in ("Back", None):
+                continue
+            # Allow toggling no_password
+            cur_no_pw = users[target].get("no_password", False)
+            pw_label  = "Disable password (currently ON)" if not cur_no_pw else "Enable password (currently OFF)"
+            action = run_menu(stdscr, target, ["Change password", pw_label, "---", "Back"])
+            if action in ("Back", None):
+                continue
+            if action == pw_label:
+                if cur_no_pw:
+                    # Turning password back on — ask for new password
+                    _draw_login(stdscr, "SET PASSWORD", username=target)
+                    try:
+                        stdscr.addstr(10, 6, "New password: ",
+                                      curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+                    except curses.error:
+                        pass
+                    stdscr.noutrefresh()
+                    curses.doupdate()
+                    new_pw = _read_password(stdscr, 10, 20)
+                    if not new_pw:
+                        continue
+                    users[target]["no_password"] = False
+                    users[target]["hash"] = _hash(new_pw, users[target]["salt"])
+                else:
+                    users[target]["no_password"] = True
+                save_users(users)
+                state = "disabled" if users[target].get("no_password") else "enabled"
+                curses_message(stdscr, f"Password {state} for '{target}'.")
                 continue
             _draw_login(stdscr, "CHANGE PASSWORD", username=target)
             try:
