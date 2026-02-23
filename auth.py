@@ -10,11 +10,11 @@ from config import (COLOR_NORMAL, COLOR_SELECTED, COLOR_TITLE,
                     COLOR_DIM, COLOR_STATUS, init_colors, base_dir)
 from status import draw_header, draw_separator, draw_menu_title, draw_status
 from ui import run_menu, curses_message, curses_confirm, _halfdelay
+from config import set_show_status
 
 USERS_FILE         = base_dir / "users.json"
 SESSION_TOKEN_FILE = Path(tempfile.gettempdir()) / "robcos.session"
 
-# ─── Session token ────────────────────────────────────────────────────────────
 def write_session(username: str):
     SESSION_TOKEN_FILE.write_text(username)
 
@@ -31,7 +31,6 @@ def clear_session():
         except Exception:
             pass
 
-# ─── Storage ──────────────────────────────────────────────────────────────────
 def load_users():
     if USERS_FILE.exists():
         return json.loads(USERS_FILE.read_text())
@@ -40,38 +39,35 @@ def load_users():
 def save_users(users):
     USERS_FILE.write_text(json.dumps(users, indent=4))
 
-# ─── Roles ────────────────────────────────────────────────────────────────────
 def is_admin(username: str) -> bool:
-    users = load_users()
-    return users.get(username, {}).get("role", "user") == "admin"
+    return load_users().get(username, {}).get("role", "user") == "admin"
 
 def get_role(username: str) -> str:
-    users = load_users()
-    return users.get(username, {}).get("role", "user")
+    return load_users().get(username, {}).get("role", "user")
 
-# ─── Hashing ──────────────────────────────────────────────────────────────────
+def get_auth_mode(username: str) -> str:
+    u = load_users().get(username, {})
+    if u.get("no_password"):
+        return "none"
+    return u.get("auth_mode", "password")
+
 def _hash(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        bytes.fromhex(salt),
-        iterations=260_000
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations=260_000
     ).hex()
 
-def make_user(password: str, role: str = "user", no_password: bool = False) -> dict:
+def make_user(password: str, role: str = "user",
+              no_password: bool = False, auth_mode: str = "password") -> dict:
     salt = secrets.token_hex(32)
-    return {"salt": salt, "hash": _hash(password, salt), "role": role, "no_password": no_password}
+    return {"salt": salt, "hash": _hash(password, salt),
+            "role": role, "no_password": no_password, "auth_mode": auth_mode}
 
 def verify(password: str, record: dict) -> bool:
     try:
-        return secrets.compare_digest(
-            _hash(password, record["salt"]),
-            record["hash"]
-        )
+        return secrets.compare_digest(_hash(password, record["salt"]), record["hash"])
     except Exception:
         return False
 
-# ─── Input helpers ────────────────────────────────────────────────────────────
 def _read_password(stdscr, row, col, max_len=64):
     curses.flushinp()
     curses.nocbreak()
@@ -87,8 +83,7 @@ def _read_password(stdscr, row, col, max_len=64):
             if buf:
                 buf.pop()
                 try:
-                    stdscr.addstr(row, col + len(buf), " ",
-                                  curses.color_pair(COLOR_NORMAL))
+                    stdscr.addstr(row, col + len(buf), " ", curses.color_pair(COLOR_NORMAL))
                     stdscr.move(row, col + len(buf))
                 except curses.error:
                     pass
@@ -99,8 +94,7 @@ def _read_password(stdscr, row, col, max_len=64):
         elif 32 <= key <= 126 and len(buf) < max_len:
             buf.append(chr(key))
             try:
-                stdscr.addstr(row, col + len(buf) - 1, "*",
-                              curses.color_pair(COLOR_NORMAL))
+                stdscr.addstr(row, col + len(buf) - 1, "*", curses.color_pair(COLOR_NORMAL))
             except curses.error:
                 pass
         stdscr.noutrefresh()
@@ -113,8 +107,7 @@ def _prompt_field(stdscr, title, label, row):
     _draw_login(stdscr, title)
     col = 6 + len(label) + 1
     try:
-        stdscr.addstr(row, 6, label,
-                      curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+        stdscr.addstr(row, 6, label, curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
     except curses.error:
         pass
     curses.flushinp()
@@ -133,8 +126,7 @@ def _prompt_field(stdscr, title, label, row):
             if buf:
                 buf.pop()
                 try:
-                    stdscr.addstr(row, col + len(buf), " ",
-                                  curses.color_pair(COLOR_NORMAL))
+                    stdscr.addstr(row, col + len(buf), " ", curses.color_pair(COLOR_NORMAL))
                     stdscr.move(row, col + len(buf))
                 except curses.error:
                     pass
@@ -145,8 +137,7 @@ def _prompt_field(stdscr, title, label, row):
         elif 32 <= key <= 126 and len(buf) < 32:
             buf.append(chr(key))
             try:
-                stdscr.addstr(row, col + len(buf) - 1, chr(key),
-                              curses.color_pair(COLOR_NORMAL))
+                stdscr.addstr(row, col + len(buf) - 1, chr(key), curses.color_pair(COLOR_NORMAL))
             except curses.error:
                 pass
         stdscr.noutrefresh()
@@ -156,7 +147,6 @@ def _prompt_field(stdscr, title, label, row):
     val = "".join(buf).strip()
     return val if val else None
 
-# ─── UI helpers ───────────────────────────────────────────────────────────────
 def _draw_login(stdscr, title, username=None):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
@@ -166,8 +156,7 @@ def _draw_login(stdscr, title, username=None):
     draw_separator(stdscr, 6, w)
     if username:
         try:
-            stdscr.addstr(8, 6, f"User: {username}",
-                          curses.color_pair(COLOR_DIM))
+            stdscr.addstr(8, 6, f"User: {username}", curses.color_pair(COLOR_DIM))
         except curses.error:
             pass
     draw_status(stdscr)
@@ -181,8 +170,7 @@ def _terminal_locked(stdscr, delay=3):
     for i, line in enumerate(lines):
         x = max(0, (w - len(line)) // 2)
         try:
-            stdscr.addstr(start + i, x, line,
-                          curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+            stdscr.addstr(start + i, x, line, curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
         except curses.error:
             pass
     stdscr.noutrefresh()
@@ -193,8 +181,7 @@ def _show_error(stdscr, msg, delay=1.5):
     import time
     h, w = stdscr.getmaxyx()
     try:
-        stdscr.addstr(h - 3, 6, msg,
-                      curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
+        stdscr.addstr(h - 3, 6, msg, curses.color_pair(COLOR_SELECTED) | curses.A_BOLD)
     except curses.error:
         pass
     stdscr.noutrefresh()
@@ -203,11 +190,9 @@ def _show_error(stdscr, msg, delay=1.5):
 
 def _show_success(stdscr, msg, delay=0.8):
     import time
-    h, w = stdscr.getmaxyx()
     _draw_login(stdscr, "")
     try:
-        stdscr.addstr(7, 6, msg,
-                      curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+        stdscr.addstr(7, 6, msg, curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
     except curses.error:
         pass
     stdscr.noutrefresh()
@@ -234,11 +219,9 @@ def _first_time_setup(stdscr):
     username = _prompt_field(stdscr, "FIRST TIME SETUP", "Admin username:", row=10)
     if not username:
         return
-
     _draw_login(stdscr, "FIRST TIME SETUP")
     try:
-        stdscr.addstr(10, 6, "Password: ",
-                      curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+        stdscr.addstr(10, 6, "Password: ", curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
     except curses.error:
         pass
     stdscr.noutrefresh()
@@ -246,11 +229,9 @@ def _first_time_setup(stdscr):
     password = _read_password(stdscr, 10, 16)
     if not password:
         return
-
     _draw_login(stdscr, "FIRST TIME SETUP")
     try:
-        stdscr.addstr(10, 6, "Confirm password: ",
-                      curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+        stdscr.addstr(10, 6, "Confirm password: ", curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
     except curses.error:
         pass
     stdscr.noutrefresh()
@@ -259,22 +240,20 @@ def _first_time_setup(stdscr):
     if confirm != password:
         _show_error(stdscr, "Passwords do not match.")
         return
-
-    # First user is always admin
-    users = {username: make_user(password, role="admin")}
+    users = {username: make_user(password, role="admin", auth_mode="password")}
     save_users(users)
     _show_success(stdscr, f"Admin account '{username}' created.")
 
 # ─── Login screen ─────────────────────────────────────────────────────────────
 def login_screen(stdscr):
     import time
+    set_show_status(False)
     is_first_window = "--first" in sys.argv
-    # Non-first windows always do a short poll before showing their own login screen.
-    # Covers both startup and post-logout scenarios.
     if "TMUX" in os.environ and not is_first_window:
-        for _ in range(20):          # 10s max then show own login
+        for _ in range(20):
             existing = read_session()
             if existing:
+                set_show_status(True)
                 return existing
             time.sleep(0.5)
 
@@ -289,34 +268,61 @@ def login_screen(stdscr):
 
     while True:
         attempts = 0
-        username = run_menu(stdscr, "LOGIN", list(users.keys()) + ["---", "Exit"])
+        username = run_menu(stdscr, "LOGIN", list(users.keys()) + ["---", "Exit"], subtitle="Users")
         if username == "__SESSION_READY__":
             existing = read_session()
             if existing:
+                set_show_status(True)
                 return existing
             continue
         if username in (None, "Back"):
             continue
         if username == "Exit":
+            set_show_status(True)
             return "__EXIT__"
 
         users = load_users()
         if username not in users:
             continue
 
-        # Skip password entirely if user has no_password set
-        if users[username].get("no_password"):
+        mode = get_auth_mode(username)
+
+        if mode == "none":
             write_session(username)
             _show_success(stdscr, f"Welcome, {username}.")
+            set_show_status(True)
             return username
+
+        if mode == "hacking":
+            import traceback as _tb
+            try:
+                from hacking import run_hacking_minigame
+                from config import init_colors
+                success = run_hacking_minigame(stdscr, username)
+                init_colors()
+                stdscr.clear()
+                if success:
+                    set_show_status(True)
+                    write_session(username)
+                    _show_success(stdscr, f"Welcome, {username}.")
+                    return username
+                else:
+                    _terminal_locked(stdscr, delay=2)
+                    break
+            except Exception as _e:
+                with open("/tmp/robcos_error.log", "a") as _f:
+                    _f.write("\n--- HACKING CRASH ---\n")
+                    _tb.print_exc(file=_f)
+                raise
 
         while attempts < MAX_ATTEMPTS:
             _draw_login(stdscr, "LOGIN", username=username)
             role_label = f"[{get_role(username)}]"
+            mode_label = f"[{mode}]"
             try:
                 stdscr.addstr(10, 6, "Password: ",
                               curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-                user_str = f"User: {username}  {role_label}"
+                user_str = f"User: {username}  {role_label}  {mode_label}"
                 stdscr.addstr(8, 6, user_str, curses.color_pair(COLOR_DIM))
             except curses.error:
                 pass
@@ -330,6 +336,7 @@ def login_screen(stdscr):
             if verify(password, users[username]):
                 write_session(username)
                 _show_success(stdscr, f"Welcome, {username}.")
+                set_show_status(True)
                 return username
 
             attempts += 1
@@ -343,7 +350,7 @@ def login_screen(stdscr):
 def user_management_menu(stdscr, current_user):
     while True:
         result = run_menu(stdscr, "User Management",
-                          ["Add User", "Change Password", "Change Role",
+                          ["Add User", "Change Login Method", "Change Role",
                            "Delete User", "---", "Back"])
         if result == "Back":
             return
@@ -356,24 +363,27 @@ def user_management_menu(stdscr, current_user):
             if username in users:
                 curses_message(stdscr, f"User '{username}' already exists.")
                 continue
-            # Pick role
             role_choice = run_menu(stdscr, "Select Role", ["user", "admin"])
             if role_choice in (None, "Back"):
                 continue
-            # Ask if no password
-            pw_choice = run_menu(stdscr, "Password", ["Require password", "No password"])
-            if pw_choice in (None, "Back"):
+            auth_choice = run_menu(stdscr, "Login Method",
+                                   ["Password", "No Password", "Hacking Minigame"])
+            if auth_choice in (None, "Back"):
                 continue
-            no_pw = pw_choice == "No password"
-            if no_pw:
-                users[username] = make_user("", role=role_choice, no_password=True)
+            if auth_choice == "No Password":
+                users[username] = make_user("", role=role_choice,
+                                            no_password=True, auth_mode="none")
                 save_users(users)
-                curses_message(stdscr, f"User '{username}' ({role_choice}) added.")
+                curses_message(stdscr, f"User '{username}' ({role_choice}, no password) added.")
+                continue
+            if auth_choice == "Hacking Minigame":
+                users[username] = make_user("", role=role_choice, auth_mode="hacking")
+                save_users(users)
+                curses_message(stdscr, f"User '{username}' ({role_choice}, hacking) added.")
                 continue
             _draw_login(stdscr, "ADD USER")
             try:
-                stdscr.addstr(7, 6, "Password: ",
-                              curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+                stdscr.addstr(7, 6, "Password: ", curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
             except curses.error:
                 pass
             stdscr.noutrefresh()
@@ -383,8 +393,7 @@ def user_management_menu(stdscr, current_user):
                 continue
             _draw_login(stdscr, "ADD USER")
             try:
-                stdscr.addstr(7, 6, "Confirm:  ",
-                              curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+                stdscr.addstr(7, 6, "Confirm:  ", curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
             except curses.error:
                 pass
             stdscr.noutrefresh()
@@ -393,86 +402,79 @@ def user_management_menu(stdscr, current_user):
             if confirm != password:
                 curses_message(stdscr, "Passwords do not match.")
                 continue
-            users[username] = make_user(password, role=role_choice)
+            users[username] = make_user(password, role=role_choice, auth_mode="password")
             save_users(users)
-            curses_message(stdscr, f"User '{username}' ({role_choice}) added.")
+            curses_message(stdscr, f"User '{username}' ({role_choice}, password) added.")
 
-        elif result == "Change Password":
-            users = load_users()
-            target = run_menu(stdscr, "Change Password",
-                              list(users.keys()) + ["---", "Back"])
+        elif result == "Change Login Method":
+            users    = load_users()
+            target   = run_menu(stdscr, "Change Login Method",
+                                list(users.keys()) + ["---", "Back"])
             if target in ("Back", None):
                 continue
-            # Allow toggling no_password
-            cur_no_pw = users[target].get("no_password", False)
-            pw_label  = "Disable password (currently ON)" if not cur_no_pw else "Enable password (currently OFF)"
-            action = run_menu(stdscr, target, ["Change password", pw_label, "---", "Back"])
+            cur_mode = get_auth_mode(target)
+            action   = run_menu(stdscr, f"{target}  [currently: {cur_mode}]",
+                                ["Password", "No Password", "Hacking Minigame", "---", "Back"])
             if action in ("Back", None):
                 continue
-            if action == pw_label:
-                if cur_no_pw:
-                    # Turning password back on — ask for new password
-                    _draw_login(stdscr, "SET PASSWORD", username=target)
+
+            if action == "No Password":
+                users[target]["auth_mode"]   = "none"
+                users[target]["no_password"] = True
+                save_users(users)
+                curses_message(stdscr, f"'{target}' set to no password.")
+
+            elif action == "Hacking Minigame":
+                users[target]["auth_mode"]   = "hacking"
+                users[target]["no_password"] = False
+                save_users(users)
+                curses_message(stdscr, f"'{target}' set to hacking minigame.")
+
+            elif action == "Password":
+                if cur_mode == "password":
+                    _draw_login(stdscr, "CHANGE PASSWORD", username=target)
                     try:
-                        stdscr.addstr(10, 6, "New password: ",
+                        stdscr.addstr(10, 6, "Current password: ",
                                       curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
                     except curses.error:
                         pass
                     stdscr.noutrefresh()
                     curses.doupdate()
-                    new_pw = _read_password(stdscr, 10, 20)
-                    if not new_pw:
+                    old_pw = _read_password(stdscr, 10, 24)
+                    if not old_pw or not verify(old_pw, users[target]):
+                        curses_message(stdscr, "Incorrect current password.")
                         continue
-                    users[target]["no_password"] = False
-                    users[target]["hash"] = _hash(new_pw, users[target]["salt"])
-                else:
-                    users[target]["no_password"] = True
+                _draw_login(stdscr, "SET PASSWORD", username=target)
+                try:
+                    stdscr.addstr(10, 6, "New password: ",
+                                  curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+                except curses.error:
+                    pass
+                stdscr.noutrefresh()
+                curses.doupdate()
+                new_pw = _read_password(stdscr, 10, 20)
+                if not new_pw:
+                    continue
+                _draw_login(stdscr, "SET PASSWORD", username=target)
+                try:
+                    stdscr.addstr(10, 6, "Confirm:      ",
+                                  curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
+                except curses.error:
+                    pass
+                stdscr.noutrefresh()
+                curses.doupdate()
+                confirm_pw = _read_password(stdscr, 10, 20)
+                if confirm_pw != new_pw:
+                    curses_message(stdscr, "Passwords do not match.")
+                    continue
+                users[target]["auth_mode"]   = "password"
+                users[target]["no_password"] = False
+                users[target]["hash"]        = _hash(new_pw, users[target]["salt"])
                 save_users(users)
-                state = "disabled" if users[target].get("no_password") else "enabled"
-                curses_message(stdscr, f"Password {state} for '{target}'.")
-                continue
-            _draw_login(stdscr, "CHANGE PASSWORD", username=target)
-            try:
-                stdscr.addstr(10, 6, "Current password: ",
-                              curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-            except curses.error:
-                pass
-            stdscr.noutrefresh()
-            curses.doupdate()
-            old_pw = _read_password(stdscr, 10, 24)
-            if not old_pw or not verify(old_pw, users[target]):
-                curses_message(stdscr, "Incorrect current password.")
-                continue
-            _draw_login(stdscr, "CHANGE PASSWORD", username=target)
-            try:
-                stdscr.addstr(10, 6, "New password:     ",
-                              curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-            except curses.error:
-                pass
-            stdscr.noutrefresh()
-            curses.doupdate()
-            new_pw = _read_password(stdscr, 10, 24)
-            if not new_pw:
-                continue
-            _draw_login(stdscr, "CHANGE PASSWORD", username=target)
-            try:
-                stdscr.addstr(10, 6, "Confirm:          ",
-                              curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-            except curses.error:
-                pass
-            stdscr.noutrefresh()
-            curses.doupdate()
-            confirm = _read_password(stdscr, 10, 24)
-            if confirm != new_pw:
-                curses_message(stdscr, "Passwords do not match.")
-                continue
-            users[target]["hash"] = _hash(new_pw, users[target]["salt"])
-            save_users(users)
-            curses_message(stdscr, f"Password changed for '{target}'.")
+                curses_message(stdscr, f"'{target}' password updated.")
 
         elif result == "Change Role":
-            users = load_users()
-            # Can't demote yourself
+            users  = load_users()
             others = [u for u in users if u != current_user]
             if not others:
                 curses_message(stdscr, "No other users to change role for.")
@@ -481,7 +483,7 @@ def user_management_menu(stdscr, current_user):
             if target in ("Back", None):
                 continue
             current_role = get_role(target)
-            new_role = "user" if current_role == "admin" else "admin"
+            new_role     = "user" if current_role == "admin" else "admin"
             if curses_confirm(stdscr, f"Change '{target}' from {current_role} to {new_role}?"):
                 users[target]["role"] = new_role
                 save_users(users)
@@ -493,13 +495,12 @@ def user_management_menu(stdscr, current_user):
                 curses_message(stdscr, "Cannot delete the last user.")
                 continue
             deletable = [u for u in users if u != current_user]
-            target = run_menu(stdscr, "Delete User", deletable + ["---", "Back"])
+            target    = run_menu(stdscr, "Delete User", deletable + ["---", "Back"])
             if target in ("Back", None):
                 continue
             if curses_confirm(stdscr, f"Delete user '{target}'?"):
                 del users[target]
                 save_users(users)
-                # Remove user's personal data folder
                 import shutil
                 from config import USERS_DIR
                 user_dir = USERS_DIR / target

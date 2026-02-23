@@ -4,7 +4,7 @@ import time
 import subprocess
 import psutil
 from datetime import datetime
-from config import (COLOR_TITLE, COLOR_STATUS, COLOR_DIM, HEADER_LINES, INPUT_TIMEOUT)
+from config import (COLOR_TITLE, COLOR_STATUS, COLOR_DIM, HEADER_LINES, INPUT_TIMEOUT, SHOW_STATUS)
 
 # ─── Drawing helpers ──────────────────────────────────────────────────────────
 def draw_header(win):
@@ -68,6 +68,9 @@ def _get_tmux_tabs():
 
 # ─── Status bar ───────────────────────────────────────────────────────────────
 def draw_status(win):
+    import config as _cfg
+    if not _cfg.SHOW_STATUS:
+        return
     h, w = win.getmaxyx()
     now = datetime.today().strftime("%A, %d. %B - %I:%M%p")
 

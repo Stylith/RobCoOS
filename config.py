@@ -174,6 +174,13 @@ HEADER_LINES = [
 SESSION_NAME = "robcos"
 NUM_WINDOWS  = 4
 
+# ─── Status bar visibility ──────────────────────────────────────────────────
+SHOW_STATUS = True
+
+def set_show_status(val: bool):
+    global SHOW_STATUS
+    SHOW_STATUS = val
+
 # ─── Logout signal ───────────────────────────────────────────────────────────
 class LogoutException(Exception):
     """Raised anywhere in the call stack to force an immediate return to login."""
