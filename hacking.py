@@ -156,6 +156,10 @@ def run_hacking_minigame(stdscr, username):
         except curses.error:
             pass
 
+        #Hint
+        stdscr.addstr(h - 2, 2, "TAB = Next Column  |  q = cancel",
+                          curses.color_pair(COLOR_DIM))
+
         # ── Hex addresses ────────────────────────────────────────────────────
         base_addr = 0xF964
         for col_block in range(COLS):
