@@ -322,7 +322,7 @@ def login_screen(stdscr):
             try:
                 stdscr.addstr(10, 6, "Password: ",
                               curses.color_pair(COLOR_NORMAL) | curses.A_BOLD)
-                user_str = f"User: {username}  {role_label}  {mode_label}"
+                user_str = f"User: {username}  {role_label}"
                 stdscr.addstr(8, 6, user_str, curses.color_pair(COLOR_DIM))
             except curses.error:
                 pass
